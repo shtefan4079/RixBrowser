@@ -1,0 +1,20 @@
+[package]
+name = "rix-dom"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rix-core = { path = "../rix-core" }
+indextree = "4.9"
+markup5ever = "0.40"
+selectors = "0.40"
+cssparser = "0.38"
+smallvec = "1.14"
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

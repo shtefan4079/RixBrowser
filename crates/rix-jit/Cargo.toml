@@ -1,0 +1,12 @@
+[package]
+name = "rix-jit"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+cranelift-codegen = "0.135"
+cranelift-frontend = "0.135"
+cranelift-native = "0.135"
+libc = "0.2"

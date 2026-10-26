@@ -1,0 +1,367 @@
+use super::*;
+
+impl BrowserShell {
+    pub fn click_at(&mut self, x: f32, y: f32) -> Option<ClickAction> {
+        if self.web_surface.contains(x, y) {
+            return self
+                .page_action_at(x, y)
+                .or(Some(ClickAction::UnfocusOmnibox));
+        }
+
+        let target = {
+            let layout = self.layout_tree.as_ref()?;
+            rix_layout::hit_test::hit_test_tree(layout, x, y)?
+        };
+        let doc = self.document.borrow();
+        let mut current = Some(target);
+        while let Some(node_id) = current {
+            if let Some(NodeData::Element(element)) = doc.get(node_id) {
+                match element.get_attribute("id") {
+                    Some("omnibox") => return Some(ClickAction::FocusOmnibox),
+                    Some("new-tab-btn") => return Some(ClickAction::NewTab),
+                    Some("theme-toggle") => return Some(ClickAction::ToggleTheme),
+                    Some("tabs-orientation-toggle") => return Some(ClickAction::ToggleTabOrientation),
+                    Some("nav-back") => return Some(ClickAction::NavBack),
+                    Some("nav-forward") => return Some(ClickAction::NavForward),
+                    Some("nav-reload") => return Some(ClickAction::NavReload),
+                    Some("nav-home") => {
+                        return Some(ClickAction::NavigateUrl(self.homepage.clone()))
+                    }
+                    _ => {}
+                }
+                if let Some(tab_id) = element
+                    .get_attribute("data-tab-id")
+                    .and_then(|id| id.parse::<u32>().ok())
+                {
+                    if element
+                        .get_attribute("class")
+                        .map(|class| class.contains("tab-close"))
+                        .unwrap_or(false)
+                    {
+                        return Some(ClickAction::CloseTab(tab_id));
+                    }
+                    return Some(ClickAction::SwitchTab(tab_id));
+                }
+                if element
+                    .get_attribute("class")
+                    .map(|class| class.contains("tab-close"))
+                    .unwrap_or(false)
+                {
+                    let mut ancestor = doc.parent(node_id);
+                    while let Some(parent) = ancestor {
+                        if let Some(NodeData::Element(tab)) = doc.get(parent) {
+                            if let Some(tab_id) = tab
+                                .get_attribute("data-tab-id")
+                                .and_then(|id| id.parse::<u32>().ok())
+                            {
+                                return Some(ClickAction::CloseTab(tab_id));
+                            }
+                        }
+                        ancestor = doc.parent(parent);
+                    }
+                }
+            }
+            current = doc.parent(node_id);
+        }
+        None
+    }
+
+    pub(super) fn page_action_at(&self, x: f32, y: f32) -> Option<ClickAction> {
+        let active_id = self.active_tab_id();
+        let page = self.pages.get(&active_id)?;
+        let base_url = document_base_url(&page.document, &page.url);
+        let node_id = rix_layout::hit_test::hit_test_tree_with_scroll(
+            &page.layout_tree,
+            Some(&page.document),
+            x - self.web_surface.bounds.x,
+            y - self.web_surface.bounds.y,
+            page.scroll_x,
+            page.scroll_y,
+        )?;
+        let mut current = Some(node_id);
+        while let Some(node) = current {
+            if let Some(NodeData::Element(element)) = page.document.get(node) {
+                if &*element.name.local == "a" {
+                    if let Some(href) = element.get_attribute("href") {
+                        return resolve_page_link(&base_url, href).map(ClickAction::NavigateUrl);
+                    }
+                } else if &*element.name.local == "input" {
+                    let input_type = element.get_attribute("type").unwrap_or("text");
+                    if matches!(input_type, "submit" | "image") {
+                        return self
+                            .form_target_for_node(active_id, node, Some(node))
+                            .map(ClickAction::NavigateUrl);
+                    }
+                    if !matches!(input_type, "button" | "reset" | "hidden") {
+                        return Some(ClickAction::FocusInPageInput);
+                    }
+                } else if &*element.name.local == "textarea" || &*element.name.local == "select" {
+                    return Some(ClickAction::FocusInPageInput);
+                } else if &*element.name.local == "button"
+                    && element.get_attribute("type").unwrap_or("submit") == "submit"
+                {
+                    return self
+                        .form_target_for_node(active_id, node, Some(node))
+                        .map(ClickAction::NavigateUrl);
+                }
+            }
+            current = page.document.parent(node);
+        }
+        None
+    }
+
+    pub async fn execute_action(&mut self, action: ClickAction) {
+        match action {
+            ClickAction::SwitchTab(id) => self.switch_tab(id),
+            ClickAction::CloseTab(id) => self.close_tab(id),
+            ClickAction::NewTab => {
+                let homepage = self.homepage.clone();
+                let _ = self.start_new_tab(&homepage);
+            }
+            ClickAction::ToggleTheme => {
+                let next_theme = match self.customization.theme_mode() {
+                    ThemeMode::Dark => ThemeMode::Light,
+                    ThemeMode::Light => ThemeMode::Dark,
+                    ThemeMode::Custom => ThemeMode::Light,
+                };
+                self.customization.set_theme_mode(next_theme);
+                let _ = self.apply_customization_to_chrome();
+                self.needs_redraw = true;
+            }
+            ClickAction::ToggleTabOrientation => {
+                let next_orientation = match self.customization.tab_orientation() {
+                    TabOrientation::Horizontal => TabOrientation::Vertical,
+                    TabOrientation::Vertical => TabOrientation::Horizontal,
+                };
+                self.customization.set_tab_orientation(next_orientation);
+                let _ = self.apply_customization_to_chrome();
+                self.needs_redraw = true;
+            }
+            ClickAction::NavBack => {
+                let active_id = self.priv_state.borrow().active_tab_id;
+                self.start_go_back(active_id);
+            }
+            ClickAction::NavForward => {
+                let active_id = self.priv_state.borrow().active_tab_id;
+                self.start_go_forward(active_id);
+            }
+            ClickAction::NavReload => {
+                self.start_reload_active_tab();
+            }
+            ClickAction::FocusOmnibox => {
+                self.omnibox_focused = true;
+                self.omnibox_selection =
+                    TextSelection::collapsed(self.omnibox_text.chars().count());
+                self.synchronize_chrome_input_state(true);
+                let _ = self.recompute_layout();
+                self.needs_redraw = true;
+            }
+            ClickAction::UnfocusOmnibox => {
+                self.omnibox_focused = false;
+                self.synchronize_chrome_input_state(false);
+                let _ = self.recompute_layout();
+                self.needs_redraw = true;
+            }
+            ClickAction::NavigateUrl(url) => {
+                let active_id = self.priv_state.borrow().active_tab_id;
+                self.start_navigation(active_id, &url);
+            }
+            ClickAction::FocusInPageInput => {
+                let active_id = self.priv_state.borrow().active_tab_id;
+                if let Some(page) = self.pages.get_mut(&active_id) {
+                    page.in_page_focused = true;
+                }
+                self.omnibox_focused = false;
+            }
+        }
+    }
+
+    pub fn active_tab_id(&self) -> u32 {
+        self.priv_state.borrow().active_tab_id
+    }
+
+    pub fn refresh_in_page_display(&mut self, tab_id: u32) {
+        if tab_id == self.active_tab_id() {
+            self.refresh_active_page_render_data();
+        }
+    }
+
+    pub async fn handle_control_message(&mut self, msg: crate::server::ControlMessage) {
+        match msg {
+            crate::server::ControlMessage::Status { resp } => {
+                let active_id = self.priv_state.borrow().active_tab_id;
+                let tabs: Vec<crate::server::TabInfo> = self
+                    .priv_state
+                    .borrow()
+                    .tabs
+                    .iter()
+                    .map(|t| crate::server::TabInfo {
+                        id: t.id,
+                        url: t.url.clone(),
+                        title: t.title.clone(),
+                    })
+                    .collect();
+
+                let title = self
+                    .pages
+                    .get(&active_id)
+                    .map(|p| p.title.clone())
+                    .unwrap_or_default();
+                let _ = resp.send(Ok(serde_json::json!({
+                    "engine": "RixBrowser 0.1.0 (100% Pure Rust)",
+                    "active_tab": active_id,
+                    "title": title,
+                    "url": self.omnibox_text,
+                    "tabs": tabs,
+                })));
+            }
+            crate::server::ControlMessage::Navigate { url, resp } => {
+                let active_id = self.priv_state.borrow().active_tab_id;
+                self.start_navigation(active_id, &url);
+                let (title, is_loading) = if let Some(p) = self.pages.get(&active_id) {
+                    (p.title.clone(), p.is_loading)
+                } else {
+                    (String::new(), false)
+                };
+                let _ = resp.send(Ok(serde_json::json!({
+                    "ok": true,
+                    "active_tab": active_id,
+                    "url": self.omnibox_text,
+                    "title": title,
+                    "is_loading": is_loading,
+                })));
+            }
+            crate::server::ControlMessage::Screenshot { path, resp } => {
+                let target_path = if path.trim().is_empty() {
+                    std::env::temp_dir()
+                        .join("rixbrowser-screenshot.png")
+                        .to_string_lossy()
+                        .to_string()
+                } else {
+                    path
+                };
+                let w = self.width.max(1.0) as u32;
+                let h = self.height.max(1.0) as u32;
+                let (scene, _) = self.render_frame();
+                match rix_render::VelloRenderer::render_scene_to_png(&scene, w, h, &target_path)
+                    .await
+                {
+                    Ok(()) => {
+                        let _ = resp.send(Ok(serde_json::json!({
+                            "ok": true,
+                            "path": target_path,
+                            "width": self.width,
+                            "height": self.height,
+                        })));
+                    }
+                    Err(e) => {
+                        let _ = resp.send(Err(format!("Screenshot error: {e}")));
+                    }
+                }
+            }
+            crate::server::ControlMessage::Click { x, y, resp } => {
+                let action = self.click_at(x, y);
+                let _ = self
+                    .handle_input(IpcInputEvent::MouseDown { x, y, button: 0 })
+                    .await;
+                let _ = resp.send(Ok(serde_json::json!({
+                    "ok": true,
+                    "action": format!("{:?}", action),
+                })));
+            }
+            crate::server::ControlMessage::Type { text, resp } => {
+                let active_id = self.priv_state.borrow().active_tab_id;
+                let input = KeyboardInput {
+                    key: text,
+                    ..Default::default()
+                };
+                if !self.omnibox_focused
+                    && self
+                        .pages
+                        .get(&active_id)
+                        .is_some_and(|page| page.focused_input.is_some())
+                {
+                    self.apply_page_key_default(&input);
+                } else {
+                    let result = edit_text(
+                        &mut self.omnibox_text,
+                        &mut self.omnibox_selection,
+                        &input,
+                        false,
+                        false,
+                    );
+                    if result.changed {
+                        self.set_chrome_omnibox_value(&self.omnibox_text.clone());
+                        self.dispatch_chrome_input_event();
+                    }
+                    self.synchronize_chrome_input_state(true);
+                }
+
+                let in_page_val = self
+                    .pages
+                    .get(&active_id)
+                    .map(|p| p.in_page_input.clone())
+                    .unwrap_or_default();
+                let _ = resp.send(Ok(serde_json::json!({
+                    "ok": true,
+                    "omnibox_text": self.omnibox_text,
+                    "in_page_input": in_page_val,
+                })));
+            }
+            crate::server::ControlMessage::Key {
+                key,
+                code,
+                ctrl,
+                alt,
+                shift,
+                meta,
+                resp,
+            } => {
+                let active_id = self.priv_state.borrow().active_tab_id;
+                self.handle_native_key(&key, &code, ctrl, alt, shift, meta)
+                    .await;
+                let in_page_val = self
+                    .pages
+                    .get(&active_id)
+                    .map(|p| p.in_page_input.clone())
+                    .unwrap_or_default();
+                let _ = resp.send(Ok(serde_json::json!({
+                    "ok": true,
+                    "key": key,
+                    "omnibox_text": self.omnibox_text,
+                    "in_page_input": in_page_val,
+                })));
+            }
+            crate::server::ControlMessage::GetDom { resp } => {
+                let active_id = self.priv_state.borrow().active_tab_id;
+                let (title, is_loading, text_snippet, node_count) = if let Some(p) = self.pages.get(&active_id)
+                {
+                    (p.title.clone(), p.is_loading, String::new(), p.node_count)
+                } else {
+                    (String::new(), false, String::new(), 0)
+                };
+                let _ = resp.send(Ok(serde_json::json!({
+                    "active_tab": active_id,
+                    "url": self.omnibox_text,
+                    "title": title,
+                    "is_loading": is_loading,
+                    "text_snippet": text_snippet,
+                    "node_count": node_count,
+                })));
+            }
+            crate::server::ControlMessage::EvalJs { script, resp } => {
+                match self.runtime.evaluate(&script) {
+                    Ok(val) => {
+                        let _ = resp.send(Ok(serde_json::json!({
+                            "ok": true,
+                            "result": val.display().to_string(),
+                        })));
+                    }
+                    Err(e) => {
+                        let _ = resp.send(Err(format!("JS error: {e}")));
+                    }
+                }
+            }
+        }
+    }
+}

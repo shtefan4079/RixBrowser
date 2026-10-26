@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RixBrowser</title>
+  <link rel="stylesheet" href="browser.css" />
+</head>
+<body>
+  <div class="browser-shell" id="browser-shell">
+    <header class="chrome-header" role="banner">
+      <div class="tabs-region">
+        <div id="tab-bar" class="tab-bar" role="tablist" aria-label="Open tabs">
+          <div class="tab active" role="tab" aria-selected="true" data-tab-id="1" tabindex="0" title="New Tab">
+            <span class="tab-favicon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M5 3h9l5 5v13H5V3Zm2 2v14h10V9h-5V5H7Zm7 .8V7h1.2L14 5.8Z" /></svg></span>
+            <span class="tab-title">New Tab</span>
+            <span class="tab-loading" aria-hidden="true"></span>
+            <button class="tab-close" aria-label="Close tab" title="Close tab (Ctrl+W)"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z" /></svg></button>
+          </div>
+        </div>
+        <button id="new-tab-btn" class="icon-btn new-tab-btn" aria-label="New tab (Ctrl+T)" title="New tab (Ctrl+T)">
+          <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4Z" /></svg>
+        </button>
+      </div>
+
+      <div class="header-actions">
+        <button id="theme-toggle" class="icon-btn" aria-label="Toggle light / dark theme" title="Toggle theme">
+          <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2v16a8 8 0 0 1 0-16Z" /></svg>
+        </button>
+        <button id="tabs-orientation-toggle" class="icon-btn" aria-label="Toggle vertical tabs" title="Vertical tabs" aria-pressed="false">
+          <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 4h18v16H3V4Zm2 2v12h4V6H5Zm6 0v12h8V6h-8ZM6 8h2v2H6V8Zm0 4h2v2H6v-2Z" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="browser-workspace">
+      <nav class="nav-bar" aria-label="Navigation">
+        <div class="nav-group">
+          <button id="nav-back" class="nav-btn" title="Back (Alt+Left)" aria-label="Back"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m11 4 1.4 1.4L6.8 11H21v2H6.8l5.6 5.6L11 20l-8-8 8-8Z" /></svg></button>
+          <button id="nav-forward" class="nav-btn" title="Forward (Alt+Right)" aria-label="Forward"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m13 4 8 8-8 8-1.4-1.4 5.6-5.6H3v-2h14.2l-5.6-5.6L13 4Z" /></svg></button>
+          <button id="nav-reload" class="nav-btn" title="Reload (Ctrl+R)" aria-label="Reload"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3a9 9 0 0 1 7 3.3V3h2v8h-8V9h5.3A7 7 0 1 0 19 13h2a9 9 0 1 1-9-10Z" /></svg></button>
+          <button id="nav-home" class="nav-btn" title="Home (Alt+Home)" aria-label="Home"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m12 3 10 9-1.4 1.5L19 12.1V21h-6v-6h-2v6H5v-8.9l-1.6 1.4L2 12 12 3Zm0 2.7-5 4.5V19h2v-6h6v6h2v-8.8l-5-4.5Z" /></svg></button>
+        </div>
+
+        <div class="omnibox" role="search">
+          <span class="omnibox-lock" id="security-lock" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 2a7 7 0 1 1 0 14 7 7 0 0 1 0-14Zm-1 5h2v6h-2v-6Zm0-3h2v2h-2V7Z" /></svg></span>
+          <input id="omnibox" type="text" class="omnibox-input" placeholder="Search or enter address" aria-label="Address bar" autocomplete="off" spellcheck="false" />
+          <span class="omnibox-hint" aria-hidden="true">Ctrl L</span>
+          <span class="omnibox-badge" id="security-badge">Internal</span>
+        </div>
+
+        <span class="fps-badge" id="fps-badge" aria-hidden="true"></span>
+        <div class="load-progress" id="load-progress" hidden aria-hidden="true"><span class="load-progress-fill"></span></div>
+      </nav>
+
+
+      <main class="viewport-container" id="viewport">
+        <web-surface id="active-web-surface" aria-label="Web content"></web-surface>
+        <div class="crash-overlay" id="crash-overlay" hidden>
+          <div class="crash-card">
+            <span class="crash-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 3h2l10 18H1L11 3Zm1 3L4.4 19h15.2L12 6Zm-1 4h2v5h-2v-5Zm0 6h2v2h-2v-2Z" /></svg></span>
+            <h2>Tab stopped responding</h2>
+            <p>The page was interrupted, but the rest of your browser is still running.</p>
+            <button id="crash-reload" class="primary-btn">Reload tab</button>
+          </div>
+        </div>
+      </main>
+
+      <footer class="status-bar" aria-label="Status">
+        <span class="status-left" id="status-left">Ready</span>
+        <span class="status-right" id="status-right">RixBrowser</span>
+      </footer>
+    </div>
+  </div>
+  <script src="browser.js"></script>
+</body>
+</html>

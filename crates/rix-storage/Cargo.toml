@@ -1,0 +1,24 @@
+[package]
+name = "rix-storage"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rix-core = { path = "../rix-core" }
+redb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+chacha20poly1305 = "0.10.1"
+rand = "0.8"
+sha2 = "0.10"
+secret-service = { version = "5.2", default-features = false, features = ["crypto-rust", "rt-tokio"] }
+zeroize = "1"
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+tempfile.workspace = true

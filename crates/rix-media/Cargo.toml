@@ -1,0 +1,24 @@
+[package]
+name = "rix-media"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rix-core = { path = "../rix-core" }
+rix-dom = { path = "../rix-dom" }
+rix-ipc = { path = "../rix-ipc" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+opus-pure = "0.2.2"
+image-webp = { version = "0.2.4", default-features = false }
+symphonia-codec-vorbis = "0.5.5"
+symphonia-core = "0.5.5"
+rusty_h264-decoder = "0.16"
+rusty_h264-common = "0.16"
+rusty_aac = "1.1"
+
+[dev-dependencies]
+tempfile = { workspace = true }

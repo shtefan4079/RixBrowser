@@ -1,0 +1,15 @@
+[package]
+name = "rix-css"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rix-dom = { path = "../rix-dom" }
+rix-core = { path = "../rix-core" }
+lightningcss = { version = "1.0.0-alpha.72", default-features = false }
+
+[dev-dependencies]
+rix-html = { path = "../rix-html" }
+

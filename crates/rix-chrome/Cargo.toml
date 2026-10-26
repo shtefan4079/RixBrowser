@@ -1,0 +1,38 @@
+[package]
+name = "rix-chrome"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rix-core = { path = "../rix-core" }
+rix-storage = { path = "../rix-storage" }
+rix-net = { path = "../rix-net" }
+rix-dom = { path = "../rix-dom" }
+rix-html = { path = "../rix-html" }
+rix-css = { path = "../rix-css" }
+rayon = "1.12"
+memchr = "2"
+rix-text = { path = "../rix-text" }
+rix-layout = { path = "../rix-layout" }
+rix-render = { path = "../rix-render" }
+rix-js = { path = "../rix-js" }
+rix-ipc = { path = "../rix-ipc" }
+rix-media = { path = "../rix-media" }
+boa_engine = "0.22.0"
+vello = "0.10"
+tokio = { workspace = true }
+url = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+unicode-segmentation = "1.13"
+markup5ever = "0.40"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }

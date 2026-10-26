@@ -1,0 +1,68 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rix-core",
+    "crates/rix-storage",
+    "crates/rix-net",
+    "crates/rix-dom",
+    "crates/rix-html",
+    "crates/rix-css",
+    "crates/rix-text",
+    "crates/rix-layout",
+    "crates/rix-render",
+    "crates/rix-js",
+    "crates/rix-ipc",
+    "crates/rix-media",
+    "crates/rix-chrome",
+    "crates/rix-app",
+    "crates/rix-jit",
+]
+
+[workspace.package]
+version = "0.1.0-alpha.1"
+edition = "2021"
+authors = ["RixBrowser Contributors"]
+license = "MIT"
+rust-version = "1.85"
+
+[workspace.dependencies]
+thiserror = "2.0"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+url = { version = "2.5", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tokio = { version = "1.43", features = ["full"] }
+redb = "2.3"
+tempfile = "3.17"
+
+[profile.dev.package.boa_engine]
+opt-level = 2
+[profile.dev.package.boa_parser]
+opt-level = 2
+[profile.dev.package.boa_ast]
+opt-level = 2
+[profile.dev.package.boa_interner]
+opt-level = 2
+[profile.dev.package.boa_gc]
+opt-level = 2
+[profile.dev.package.boa_string]
+opt-level = 2
+
+[profile.dev.package.rix-js]
+opt-level = 2
+
+[profile.dev.package.rix-dom]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+strip = "debuginfo"
+lto = "thin"
+
+
+[patch.crates-io]
+boa_ast = { path = "vendor/boa_ast" }
+boa_engine = { path = "vendor/boa_engine" }

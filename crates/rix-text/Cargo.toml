@@ -1,0 +1,22 @@
+[package]
+name = "rix-text"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rix-core = { path = "../rix-core" }
+linebender_resource_handle = "0.1"
+roxmltree = "0.21"
+read-fonts = "0.39"
+swash = "0.2"
+rustybuzz = "0.20"
+unicode-bidi = "0.3"
+unicode-segmentation = "1.13"
+unicode-linebreak = "0.1"
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

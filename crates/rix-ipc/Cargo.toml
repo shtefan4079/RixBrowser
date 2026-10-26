@@ -1,0 +1,18 @@
+[package]
+name = "rix-ipc"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rix-core = { path = "../rix-core" }
+postcard = { version = "1.1", features = ["alloc"] }
+memmap2 = "0.9"
+serde = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]

@@ -1,0 +1,25 @@
+[package]
+name = "rix-render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rix-core = { path = "../rix-core" }
+rix-dom = { path = "../rix-dom" }
+rix-css = { path = "../rix-css" }
+rix-text = { path = "../rix-text" }
+rix-layout = { path = "../rix-layout" }
+vello = "0.10"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+svgtypes = "0.16"
+pollster = "1.0"
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+pollster = "1.0"
+rix-html = { path = "../rix-html" }
+tempfile.workspace = true

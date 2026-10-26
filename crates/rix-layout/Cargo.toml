@@ -1,0 +1,20 @@
+[package]
+name = "rix-layout"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rix-core = { path = "../rix-core" }
+rix-dom = { path = "../rix-dom" }
+rix-css = { path = "../rix-css" }
+rix-text = { path = "../rix-text" }
+taffy = { version = "0.14", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout"] }
+thiserror.workspace = true
+tracing.workspace = true
+unicode-segmentation = "1.13"
+
+[dev-dependencies]
+rix-html = { path = "../rix-html" }
+tempfile.workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "rix-html"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rix-core = { path = "../rix-core" }
+rix-dom = { path = "../rix-dom" }
+html5ever = "0.40"
+markup5ever = "0.40"
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
