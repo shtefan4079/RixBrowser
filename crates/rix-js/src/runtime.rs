@@ -167,6 +167,7 @@ impl JsRuntime {
         };
 
         runtime.register_console();
+        let _ = crate::web_api::register_standard_web_platform_apis(runtime.context_mut());
         runtime
     }
 
@@ -759,6 +760,24 @@ mod tests {
                 }
                 const instance = construct(Base, {});
                 isClassRegex && namedClassMatches && (instance instanceof Base) && instance.initialized === true;
+            "#,
+            )
+            .unwrap();
+        assert_eq!(res.as_boolean(), Some(true));
+    }
+
+    #[test]
+    fn test_intl_namespace_and_methods() {
+        let mut runtime = JsRuntime::new(JsRuntimeConfig::default());
+        let res = runtime
+            .evaluate(
+                r#"
+                const hasIntl = typeof Intl !== "undefined";
+                const tz = (new Intl.DateTimeFormat).resolvedOptions().timeZone;
+                const formattedNum = (new Intl.NumberFormat("en-u-nu-latn")).format(42);
+                const supported = Intl.NumberFormat.supportedLocalesOf(["en".replace("_", "-")]);
+                const collatorCmp = (new Intl.Collator()).compare("a", "b");
+                hasIntl && typeof tz === "string" && tz.length > 0 && formattedNum === "42" && supported.length > 0 && collatorCmp < 0;
             "#,
             )
             .unwrap();

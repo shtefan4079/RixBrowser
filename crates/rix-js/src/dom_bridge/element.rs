@@ -128,7 +128,9 @@ pub(super) fn element_set_attribute(
             }
 
             let doc = state.borrow().document.clone();
-            let mut doc_mut = doc.borrow_mut();
+            let Ok(mut doc_mut) = doc.try_borrow_mut() else {
+                return Ok(JsValue::undefined());
+            };
             let mut old = None;
             let mut changed = false;
             if let Some(NodeData::Element(elem)) = doc_mut.get_mut_untracked(node_id) {
@@ -184,7 +186,9 @@ pub(super) fn element_remove_attribute(
         let state = context.get_data::<Rc<RefCell<DomBridgeState>>>().cloned();
         if let Some(state) = state {
             let doc = state.borrow().document.clone();
-            let mut doc_mut = doc.borrow_mut();
+            let Ok(mut doc_mut) = doc.try_borrow_mut() else {
+                return Ok(JsValue::undefined());
+            };
             let mut old = None;
             if let Some(NodeData::Element(elem)) = doc_mut.get_mut_untracked(node_id) {
                 old = elem.get_attribute(&attr_name).map(str::to_owned);

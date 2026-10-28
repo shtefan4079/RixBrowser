@@ -363,8 +363,9 @@ impl BrowserShell {
             self.document.borrow_mut().set_focused(None, false);
             self.document.borrow_mut().set_text_selection(None);
             self.omnibox_focused = false;
+            let root = self.document.borrow().root();
             let _ = dispatch_dom_event_to_js(
-                self.document.borrow().root(),
+                root,
                 "click",
                 None,
                 self.runtime.context_mut(),
@@ -1319,5 +1320,24 @@ mod tests {
         let changed = shell.update_chrome_pointer(Some((cx, cy)), false);
         assert!(changed || shell.document.borrow().is_hovered(menu_item));
         assert!(shell.document.borrow().is_hovered(menu_item));
+    }
+
+    #[tokio::test]
+    async fn test_outside_click_popup_dismissal_no_panic() {
+        let mut shell = BrowserShell::new_with_customization(
+            1280.0,
+            800.0,
+            crate::customization::CustomizationManager::load_or_default(),
+        ).unwrap();
+        shell.create_new_tab("https://www.youtube.com").await;
+        shell.recompute_layout().unwrap();
+
+        shell.runtime.evaluate("document.getElementById('more-menu').removeAttribute('hidden');").unwrap();
+
+        let res = shell.handle_input(IpcInputEvent::MouseDown { x: 500.0, y: 500.0, button: 0 }).await;
+        assert!(res.is_ok());
+
+        let is_hidden: bool = shell.runtime.evaluate("document.getElementById('more-menu').hasAttribute('hidden')").unwrap().to_boolean();
+        assert!(is_hidden);
     }
 }

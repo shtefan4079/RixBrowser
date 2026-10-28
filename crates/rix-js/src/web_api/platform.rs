@@ -142,6 +142,11 @@ pub fn register_standard_web_platform_apis(context: &mut Context) -> Result<(), 
         NativeFunction::from_fn_ptr(secure_random_values_bytes),
     )?;
     context.register_global_callable(
+        js_string!("__rix_get_time_zone"),
+        0,
+        NativeFunction::from_fn_ptr(get_system_time_zone),
+    )?;
+    context.register_global_callable(
         js_string!("__rix_is_native_promise"),
         1,
         NativeFunction::from_fn_ptr(is_native_promise),
@@ -169,6 +174,285 @@ pub fn register_standard_web_platform_apis(context: &mut Context) -> Result<(), 
                     new Uint8Array(view.buffer, view.byteOffset, view.byteLength).set(bytes);
                     return view;
                 };
+            }
+        })();
+
+        (function() {
+            if (typeof globalThis.Intl !== "undefined") return;
+            const defaultTz = (function() {
+                try {
+                    if (typeof globalThis.__rix_get_time_zone === "function") return globalThis.__rix_get_time_zone();
+                } catch (_) {}
+                return "UTC";
+            })();
+            delete globalThis.__rix_get_time_zone;
+
+            class DateTimeFormat {
+                constructor(locales, options) {
+                    this._options = options || {};
+                    this._locale = Array.isArray(locales) ? locales[0] : (typeof locales === 'string' ? locales : 'en-US');
+                    this._timeZone = (this._options && this._options.timeZone) || defaultTz || "UTC";
+                }
+                resolvedOptions() {
+                    return {
+                        locale: this._locale || "en-US",
+                        calendar: "gregory",
+                        numberingSystem: "latn",
+                        timeZone: this._timeZone,
+                        year: "numeric",
+                        month: "numeric",
+                        day: "numeric"
+                    };
+                }
+                format(date) {
+                    const d = date instanceof Date ? date : (date !== undefined ? new Date(date) : new Date());
+                    return d.toLocaleString(this._locale || "en-US");
+                }
+                formatToParts(date) {
+                    return [{ type: "literal", value: this.format(date) }];
+                }
+                formatRange(startDate, endDate) {
+                    return this.format(startDate) + " – " + this.format(endDate);
+                }
+                formatRangeToParts(startDate, endDate) {
+                    return [{ type: "literal", value: this.formatRange(startDate, endDate) }];
+                }
+                static supportedLocalesOf(locales, options) {
+                    if (!locales) return [];
+                    return Array.isArray(locales) ? locales.slice() : [String(locales)];
+                }
+            }
+
+            class NumberFormat {
+                constructor(locales, options) {
+                    this._options = options || {};
+                    this._locale = Array.isArray(locales) ? locales[0] : (typeof locales === 'string' ? locales : 'en-US');
+                }
+                resolvedOptions() {
+                    return {
+                        locale: this._locale || "en-US",
+                        numberingSystem: "latn",
+                        style: (this._options && this._options.style) || "decimal",
+                        minimumIntegerDigits: 1,
+                        minimumFractionDigits: 0,
+                        maximumFractionDigits: 3,
+                        useGrouping: "auto",
+                        notation: "standard",
+                        signDisplay: "auto"
+                    };
+                }
+                format(num) {
+                    const n = Number(num);
+                    if (this._options && this._options.style === 'percent') return (n * 100).toFixed(0) + '%';
+                    return String(n);
+                }
+                formatToParts(num) {
+                    return [{ type: "integer", value: String(num) }];
+                }
+                formatRange(start, end) {
+                    return this.format(start) + " – " + this.format(end);
+                }
+                formatRangeToParts(start, end) {
+                    return [{ type: "literal", value: this.formatRange(start, end) }];
+                }
+                static supportedLocalesOf(locales, options) {
+                    if (!locales) return [];
+                    return Array.isArray(locales) ? locales.slice() : [String(locales)];
+                }
+            }
+
+            class Collator {
+                constructor(locales, options) {
+                    this._options = options || {};
+                    this._locale = Array.isArray(locales) ? locales[0] : (typeof locales === 'string' ? locales : 'en-US');
+                }
+                compare(a, b) {
+                    return String(a).localeCompare(String(b));
+                }
+                resolvedOptions() {
+                    return {
+                        locale: this._locale || "en-US",
+                        usage: "sort",
+                        sensitivity: "variant",
+                        ignorePunctuation: false,
+                        collation: "default",
+                        numeric: false
+                    };
+                }
+                static supportedLocalesOf(locales, options) {
+                    if (!locales) return [];
+                    return Array.isArray(locales) ? locales.slice() : [String(locales)];
+                }
+            }
+
+            class PluralRules {
+                constructor(locales, options) {
+                    this._options = options || {};
+                    this._locale = Array.isArray(locales) ? locales[0] : (typeof locales === 'string' ? locales : 'en-US');
+                }
+                select(n) {
+                    return Number(n) === 1 ? "one" : "other";
+                }
+                resolvedOptions() {
+                    return {
+                        locale: this._locale || "en-US",
+                        pluralCategories: ["one", "other"],
+                        type: "cardinal",
+                        minimumIntegerDigits: 1,
+                        minimumFractionDigits: 0,
+                        maximumFractionDigits: 3
+                    };
+                }
+                static supportedLocalesOf(locales, options) {
+                    if (!locales) return [];
+                    return Array.isArray(locales) ? locales.slice() : [String(locales)];
+                }
+            }
+
+            class RelativeTimeFormat {
+                constructor(locales, options) {
+                    this._options = options || {};
+                    this._locale = Array.isArray(locales) ? locales[0] : (typeof locales === 'string' ? locales : 'en-US');
+                }
+                format(value, unit) {
+                    const v = Number(value);
+                    return v > 0 ? "in " + v + " " + unit : Math.abs(v) + " " + unit + " ago";
+                }
+                formatToParts(value, unit) {
+                    return [{ type: "literal", value: this.format(value, unit) }];
+                }
+                resolvedOptions() {
+                    return {
+                        locale: this._locale || "en-US",
+                        style: "long",
+                        numeric: "always",
+                        numberingSystem: "latn"
+                    };
+                }
+                static supportedLocalesOf(locales, options) {
+                    if (!locales) return [];
+                    return Array.isArray(locales) ? locales.slice() : [String(locales)];
+                }
+            }
+
+            class ListFormat {
+                constructor(locales, options) {
+                    this._options = options || {};
+                    this._locale = Array.isArray(locales) ? locales[0] : (typeof locales === 'string' ? locales : 'en-US');
+                }
+                format(list) {
+                    return Array.from(list).join(", ");
+                }
+                formatToParts(list) {
+                    return [{ type: "element", value: this.format(list) }];
+                }
+                resolvedOptions() {
+                    return {
+                        locale: this._locale || "en-US",
+                        type: "conjunction",
+                        style: "long"
+                    };
+                }
+                static supportedLocalesOf(locales, options) {
+                    if (!locales) return [];
+                    return Array.isArray(locales) ? locales.slice() : [String(locales)];
+                }
+            }
+
+            class Locale {
+                constructor(tag) {
+                    this.baseName = String(tag);
+                    this.language = this.baseName.split("-")[0] || "en";
+                }
+                maximize() { return this; }
+                minimize() { return this; }
+                toString() { return this.baseName; }
+            }
+
+            class Segmenter {
+                constructor(locales, options) {
+                    this._options = options || {};
+                    this._locale = Array.isArray(locales) ? locales[0] : (typeof locales === 'string' ? locales : 'en-US');
+                }
+                segment(input) {
+                    const str = String(input);
+                    return {
+                        [Symbol.iterator]() {
+                            let index = 0;
+                            return {
+                                next() {
+                                    if (index >= str.length) return { done: true };
+                                    const segment = str[index];
+                                    const cur = index;
+                                    index++;
+                                    return { value: { segment, index: cur, input: str, isWordLike: true }, done: false };
+                                }
+                            };
+                        },
+                        containing(idx) {
+                            return { segment: str[idx] || "", index: idx, input: str, isWordLike: true };
+                        }
+                    };
+                }
+                resolvedOptions() {
+                    return {
+                        locale: this._locale || "en-US",
+                        granularity: (this._options && this._options.granularity) || "grapheme"
+                    };
+                }
+                static supportedLocalesOf(locales, options) {
+                    if (!locales) return [];
+                    return Array.isArray(locales) ? locales.slice() : [String(locales)];
+                }
+            }
+
+            class DisplayNames {
+                constructor(locales, options) {
+                    this._options = options || {};
+                    this._locale = Array.isArray(locales) ? locales[0] : (typeof locales === 'string' ? locales : 'en-US');
+                }
+                of(code) { return String(code); }
+                resolvedOptions() {
+                    return {
+                        locale: this._locale || "en-US",
+                        style: "long",
+                        type: (this._options && this._options.type) || "language",
+                        fallback: "code"
+                    };
+                }
+                static supportedLocalesOf(locales, options) {
+                    if (!locales) return [];
+                    return Array.isArray(locales) ? locales.slice() : [String(locales)];
+                }
+            }
+
+            function getCanonicalLocales(locales) {
+                if (!locales) return [];
+                return Array.isArray(locales) ? locales.map(String) : [String(locales)];
+            }
+
+            const intlObj = {
+                DateTimeFormat,
+                NumberFormat,
+                Collator,
+                PluralRules,
+                RelativeTimeFormat,
+                ListFormat,
+                Locale,
+                Segmenter,
+                DisplayNames,
+                getCanonicalLocales,
+                [Symbol.toStringTag]: "Intl"
+            };
+
+            Object.defineProperty(globalThis, "Intl", {
+                value: intlObj,
+                writable: true,
+                enumerable: false,
+                configurable: true
+            });
+            if (globalThis.window) {
+                globalThis.window.Intl = intlObj;
             }
         })();
 
@@ -1639,6 +1923,24 @@ pub fn register_standard_web_platform_apis(context: &mut Context) -> Result<(), 
     register_abort_api(context)?;
     super::register_history(context)?;
     Ok(())
+}
+
+pub(super) fn get_system_time_zone(
+    _this: &JsValue,
+    _args: &[JsValue],
+    _context: &mut Context,
+) -> JsResult<JsValue> {
+    let tz = std::env::var("TZ").ok().or_else(|| {
+        std::fs::read_link("/etc/localtime").ok().and_then(|path| {
+            let s = path.to_string_lossy().into_owned();
+            if let Some(pos) = s.find("zoneinfo/") {
+                Some(s[pos + 9..].to_string())
+            } else {
+                None
+            }
+        })
+    }).unwrap_or_else(|| "UTC".to_string());
+    Ok(JsValue::from(js_string!(tz)))
 }
 
 pub(super) fn secure_random_values_bytes(
