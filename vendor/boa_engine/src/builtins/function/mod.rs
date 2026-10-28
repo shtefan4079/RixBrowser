@@ -882,6 +882,19 @@ impl BuiltInFunctionObject {
             return Ok(JsString::from(code_points).into());
         }
 
+        if code.is_class_constructor() || code.is_derived_constructor() {
+            let name = code.name();
+            if name.is_empty() {
+                return Ok(js_string!("class { [native code] }").into());
+            }
+            return Ok(js_string!(
+                js_str!("class "),
+                name,
+                js_str!(" { [native code] }")
+            )
+            .into());
+        }
+
         Ok(js_string!(
             js_str!("function "),
             code.name(),

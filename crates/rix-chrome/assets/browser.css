@@ -741,6 +741,7 @@ a:hover {
   cursor: pointer;
   color: var(--fg);
   font-size: 13px;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .suggestion-item:hover, .suggestion-item.selected, .suggestion-item.active {
@@ -808,6 +809,7 @@ a:hover {
   color: var(--fg);
   font-size: 13px;
   cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .more-menu-item:hover {
@@ -984,6 +986,7 @@ web-surface {
   border-radius: 6px;
   cursor: pointer;
   text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .context-menu-item:hover {

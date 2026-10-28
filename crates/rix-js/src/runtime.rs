@@ -740,6 +740,32 @@ mod tests {
     }
 
     #[test]
+    fn test_class_constructor_to_string_and_subclassing() {
+        let mut runtime = JsRuntime::new(JsRuntimeConfig::default());
+        let res = runtime
+            .evaluate(
+                r#"
+                const isClassRegex = /\bclass\b/.test((class {}).toString());
+                const namedClassMatches = /\bclass\b/.test((class Foo {}).toString());
+                const phQ = /\bclass\b/.test((class {}).toString());
+                class Base {
+                    constructor() {
+                        this.initialized = true;
+                    }
+                }
+                function construct(G, W) {
+                    function v() {}
+                    return phQ ? (v.prototype = Object.create(G.prototype), Reflect.construct(G, [], v)) : G.apply(W);
+                }
+                const instance = construct(Base, {});
+                isClassRegex && namedClassMatches && (instance instanceof Base) && instance.initialized === true;
+            "#,
+            )
+            .unwrap();
+        assert_eq!(res.as_boolean(), Some(true));
+    }
+
+    #[test]
     fn test_hot_jit_execution_with_comparisons_and_try_catch() {
         let mut runtime = JsRuntime::new(JsRuntimeConfig::default());
 

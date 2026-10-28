@@ -1,6 +1,30 @@
 use super::*;
 
 impl BrowserShell {
+    pub(crate) fn hit_chrome_overlay(&self, x: f32, y: f32) -> Option<rix_dom::NodeId> {
+        let lt = self.layout_tree.as_ref()?;
+        let node = rix_layout::hit_test::hit_test_tree(lt, x, y)?;
+        let doc = self.document.borrow();
+        let is_overlay = std::iter::once(node).chain(doc.ancestors(node)).any(|n| {
+            matches!(doc.get(n), Some(NodeData::Element(el)) if {
+                let id = el.get_attribute("id").unwrap_or("");
+                let class = el.get_attribute("class").unwrap_or("");
+                id == "site-info-popup"
+                    || id == "tab-context-menu"
+                    || id == "more-menu"
+                    || id == "omnibox-suggestions"
+                    || id == "command-palette"
+                    || id == "quick-search-palette"
+                    || class.contains("site-info-popup")
+                    || class.contains("context-menu")
+                    || class.contains("more-menu")
+                    || class.contains("omnibox-suggestions")
+                    || class.contains("palette")
+            })
+        });
+        is_overlay.then_some(node)
+    }
+
     fn connected_chrome_focused_node(&self) -> Option<rix_dom::NodeId> {
         let mut doc = self.document.borrow_mut();
         let focused = doc.focused_node()?;
@@ -19,6 +43,9 @@ impl BrowserShell {
         let is_internal = self.is_active_internal();
         let target = position.and_then(|(x, y)| {
             if !is_internal && self.web_surface.contains(x, y) {
+                if let Some(overlay_node) = self.hit_chrome_overlay(x, y) {
+                    return Some(overlay_node);
+                }
                 return None;
             }
             self.layout_tree
@@ -32,7 +59,7 @@ impl BrowserShell {
     }
 
     pub fn cursor_at(&self, x: f32, y: f32) -> &'static str {
-        if !self.is_active_internal() && self.web_surface.contains(x, y) {
+        if !self.is_active_internal() && self.web_surface.contains(x, y) && self.hit_chrome_overlay(x, y).is_none() {
             let active_id = self.active_tab_id();
             let Some(page) = self.pages.get(&active_id) else {
                 return "default";
@@ -304,7 +331,9 @@ impl BrowserShell {
         let is_in_surface = match event {
             IpcInputEvent::MouseMove { x, y }
             | IpcInputEvent::MouseDown { x, y, .. }
-            | IpcInputEvent::MouseUp { x, y, .. } => self.web_surface.contains(*x, *y),
+            | IpcInputEvent::MouseUp { x, y, .. } => {
+                self.web_surface.contains(*x, *y) && self.hit_chrome_overlay(*x, *y).is_none()
+            }
             IpcInputEvent::Scroll { .. } => true,
             _ => false,
         };
@@ -328,19 +357,19 @@ impl BrowserShell {
     }
 
     pub(super) async fn route_mouse_down(&mut self, x: f32, y: f32, button: u8) {
-        let hit_chrome_overlay = self.layout_tree.as_ref().and_then(|lt| {
-            let node = rix_layout::hit_test::hit_test_tree(lt, x, y)?;
-            let doc = self.document.borrow();
-            let is_overlay = std::iter::once(node).chain(doc.ancestors(node)).any(|n| {
-                matches!(doc.get(n), Some(NodeData::Element(el)) if matches!(el.get_attribute("id"), Some("site-info-popup" | "tab-context-menu" | "more-menu" | "omnibox-suggestions" | "command-palette")) || matches!(el.get_attribute("class"), Some(c) if c.contains("site-info-popup") || c.contains("context-menu") || c.contains("more-menu") || c.contains("omnibox-suggestions")))
-            });
-            is_overlay.then_some(node)
-        });
+        let hit_chrome_overlay = self.hit_chrome_overlay(x, y);
 
         if !self.is_active_internal() && self.web_surface.contains(x, y) && hit_chrome_overlay.is_none() {
             self.document.borrow_mut().set_focused(None, false);
             self.document.borrow_mut().set_text_selection(None);
             self.omnibox_focused = false;
+            let _ = dispatch_dom_event_to_js(
+                self.document.borrow().root(),
+                "click",
+                None,
+                self.runtime.context_mut(),
+            );
+            self.synchronize_privileged_host(self.active_tab_id()).await;
             if let Some(action) = self.dispatch_page_click(x, y) {
                 self.execute_action(action).await;
             }
@@ -662,14 +691,7 @@ impl BrowserShell {
     }
 
     pub(super) fn dispatch_chrome_click_at(&mut self, x: f32, y: f32, button: u8) -> Option<rix_dom::NodeId> {
-        let is_overlay = self.layout_tree.as_ref().and_then(|lt| {
-            let node = rix_layout::hit_test::hit_test_tree(lt, x, y)?;
-            let doc = self.document.borrow();
-            let is_overlay = std::iter::once(node).chain(doc.ancestors(node)).any(|n| {
-                matches!(doc.get(n), Some(NodeData::Element(el)) if matches!(el.get_attribute("id"), Some("site-info-popup" | "tab-context-menu" | "more-menu" | "omnibox-suggestions" | "command-palette")) || matches!(el.get_attribute("class"), Some(c) if c.contains("site-info-popup") || c.contains("context-menu") || c.contains("more-menu") || c.contains("omnibox-suggestions")))
-            });
-            is_overlay.then_some(node)
-        });
+        let is_overlay = self.hit_chrome_overlay(x, y);
 
         let target_node = if let Some(ref lt) = self.layout_tree {
             if is_overlay.is_some() {
@@ -1267,5 +1289,35 @@ mod tests {
         let _ = shell.render_frame();
 
         assert_eq!(shell.internal_scroll_y, 120.0);
+    }
+
+    #[tokio::test]
+    async fn test_overlay_hover_on_external_page() {
+        let mut shell = BrowserShell::new_with_customization(
+            1280.0,
+            800.0,
+            crate::customization::CustomizationManager::load_or_default(),
+        ).unwrap();
+        shell.create_new_tab("https://www.youtube.com").await;
+        assert!(!shell.is_active_internal());
+        shell.recompute_layout().unwrap();
+
+        shell.runtime.evaluate("document.getElementById('more-menu').removeAttribute('hidden');").unwrap();
+        shell.recompute_layout().unwrap();
+
+        let doc = shell.document.borrow();
+        let menu_item = doc.query_selector(doc.root(), "#menu-new-tab").unwrap();
+        drop(doc);
+
+        let lt = shell.layout_tree.as_ref().unwrap();
+        let item_box = lt.iter().find(|b| b.dom_node == Some(menu_item)).map(|b| b.dimensions.border_box()).unwrap();
+
+        let cx = item_box.x + item_box.width / 2.0;
+        let cy = item_box.y + item_box.height / 2.0;
+
+        assert_eq!(shell.cursor_at(cx, cy), "pointer");
+        let changed = shell.update_chrome_pointer(Some((cx, cy)), false);
+        assert!(changed || shell.document.borrow().is_hovered(menu_item));
+        assert!(shell.document.borrow().is_hovered(menu_item));
     }
 }

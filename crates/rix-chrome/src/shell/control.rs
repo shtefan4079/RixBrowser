@@ -2,14 +2,7 @@ use super::*;
 
 impl BrowserShell {
     pub fn click_at(&mut self, x: f32, y: f32) -> Option<ClickAction> {
-        let hit_chrome_overlay = self.layout_tree.as_ref().and_then(|lt| {
-            let node = rix_layout::hit_test::hit_test_tree(lt, x, y)?;
-            let doc = self.document.borrow();
-            let is_overlay = std::iter::once(node).chain(doc.ancestors(node)).any(|n| {
-                matches!(doc.get(n), Some(NodeData::Element(el)) if matches!(el.get_attribute("id"), Some("site-info-popup" | "tab-context-menu" | "more-menu" | "omnibox-suggestions" | "command-palette")) || matches!(el.get_attribute("class"), Some(c) if c.contains("site-info-popup") || c.contains("context-menu") || c.contains("more-menu") || c.contains("omnibox-suggestions")))
-            });
-            is_overlay.then_some(node)
-        });
+        let hit_chrome_overlay = self.hit_chrome_overlay(x, y);
 
         if !self.is_active_internal() && self.web_surface.contains(x, y) && hit_chrome_overlay.is_none() {
             return self
