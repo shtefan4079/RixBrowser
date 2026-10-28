@@ -48,7 +48,7 @@ use rix_jit::{
 };
 
 /// Number of calls after which a function body becomes a JIT candidate.
-pub const HOT_THRESHOLD: u32 = 16;
+pub const HOT_THRESHOLD: u32 = 8;
 
 /// Number of loop iterations after which a body running in the interpreter
 /// asks for on-stack replacement.
@@ -58,7 +58,7 @@ pub const HOT_THRESHOLD: u32 = 16;
 /// single call. Once the frame's loop counter reaches this threshold the
 /// interpreter asks for the body to be compiled and the rest of the loop runs
 /// natively, from the frame's current instruction.
-pub const OSR_LOOP_THRESHOLD: u64 = 128;
+pub const OSR_LOOP_THRESHOLD: u64 = 64;
 
 /// Number of deopts after which a body is permanently disabled.
 const MAX_DEOPTS: u32 = 8;

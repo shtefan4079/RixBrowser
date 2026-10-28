@@ -464,6 +464,8 @@ enum Request {
         cookies: Vec<rix_storage::models::Cookie>,
         #[serde(default)]
         local_storage: HashMap<String, String>,
+        #[serde(default)]
+        theme: Option<String>,
     },
     Layout(LayoutChange),
     Event {
@@ -485,6 +487,9 @@ enum Request {
     },
     SetPageVisibility {
         visible: bool,
+    },
+    SetTheme {
+        theme: String,
     },
     AnimationFrameOpportunity {
         timestamp_ms: f64,
@@ -828,6 +833,7 @@ impl PageWorker {
             page_visible,
             cookies,
             HashMap::new(),
+            None,
         )
     }
 
@@ -843,6 +849,7 @@ impl PageWorker {
         page_visible: bool,
         cookies: Vec<rix_storage::models::Cookie>,
         local_storage: HashMap<String, String>,
+        theme: Option<String>,
     ) -> Result<Self, String> {
         let performance_started_at = Instant::now();
         let performance_elapsed_at_start_ms =
@@ -901,6 +908,7 @@ impl PageWorker {
                 layout,
                 cookies,
                 local_storage,
+                theme,
             })
             .map_err(|error| error.to_string())?;
         let (tokens, nodes) = if let Some(doc) = document {
@@ -1046,6 +1054,17 @@ impl PageWorker {
                 tracing::warn!("Page worker disconnected before visibility update");
             }
         }
+    }
+
+    pub fn set_theme(&self, theme: &str) -> bool {
+        if self.stopped {
+            return false;
+        }
+        self.requests
+            .try_send(Request::SetTheme {
+                theme: theme.to_string(),
+            })
+            .is_ok()
     }
 
     pub fn animation_frame_opportunity(&self, at: Instant) -> bool {
@@ -2493,10 +2512,19 @@ fn run_worker_runtime() -> Result<(), String> {
         layout,
         cookies,
         local_storage,
+        theme,
     } = serde_json::from_slice(&message).map_err(|error| error.to_string())?
     else {
         return Err("page worker requires bootstrap first".into());
     };
+    if let Some(ref t) = theme {
+        let scheme = match t.as_str() {
+            "light" => rix_css::ColorScheme::Light,
+            _ => rix_css::ColorScheme::Dark,
+        };
+        rix_css::set_preferred_color_scheme(scheme);
+        rix_css::clear_media_query_cache();
+    }
     std::thread::spawn(|| {
         let _ = crate::page_layout_host::cached_system_fonts();
     });
@@ -2544,6 +2572,26 @@ fn run_worker_runtime() -> Result<(), String> {
     let shared_document = Rc::new(RefCell::new(Document::new()));
     let mut parser_stream = HtmlParserStream::with_document(shared_document.clone());
     parser_stream.feed(&html);
+
+    let initial_scheme = if let Some(ref t) = theme {
+        match t.as_str() {
+            "light" => rix_css::ColorScheme::Light,
+            _ => rix_css::ColorScheme::Dark,
+        }
+    } else {
+        rix_css::preferred_color_scheme()
+    };
+    if initial_scheme == rix_css::ColorScheme::Dark {
+        let mut doc = shared_document.borrow_mut();
+        let root = doc.root();
+        if let Some(html_id) = doc.query_selector(root, "html") {
+            if let Some(NodeData::Element(elem)) = doc.get_mut(html_id) {
+                if (url.contains("youtube.com") || url.contains("youtu.be")) && !elem.has_attribute("dark") {
+                    elem.set_attribute("dark", "");
+                }
+            }
+        }
+    }
 
     let mut dom_state = DomBridgeState::with_shared_document(shared_document.clone());
     dom_state.page_visible = page_visible;
@@ -3143,6 +3191,7 @@ fn run_worker_runtime() -> Result<(), String> {
                         doc.bump_revision();
                     }
                     let _ = runtime.evaluate("if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') window.dispatchEvent(new Event('resize'));");
+                    let _ = rix_js::dom_bridge::notify_match_media(runtime.context_mut());
                 }
                 send(Update::Busy)?;
                 send(Update::TaskStarted {
@@ -3153,6 +3202,37 @@ fn run_worker_runtime() -> Result<(), String> {
                     } else {
                         "layout observer checkpoint".into()
                     },
+                })?;
+            }
+            Ok(Request::SetTheme { theme }) => {
+                let scheme = match theme.as_str() {
+                    "light" => rix_css::ColorScheme::Light,
+                    _ => rix_css::ColorScheme::Dark,
+                };
+                rix_css::set_preferred_color_scheme(scheme);
+                rix_css::clear_media_query_cache();
+                {
+                    let doc_rc = state.borrow().document.clone();
+                    let mut doc = doc_rc.borrow_mut();
+                    let root = doc.root();
+                    if let Some(html_id) = doc.query_selector(root, "html") {
+                        if let Some(NodeData::Element(elem)) = doc.get_mut(html_id) {
+                            if url.contains("youtube.com") || url.contains("youtu.be") {
+                                if scheme == rix_css::ColorScheme::Dark {
+                                    elem.set_attribute("dark", "");
+                                } else {
+                                    elem.remove_attribute("dark");
+                                }
+                            }
+                        }
+                    }
+                    doc.bump_style_revision();
+                    doc.bump_revision();
+                }
+                let _ = rix_js::dom_bridge::notify_match_media(runtime.context_mut());
+                send(Update::Busy)?;
+                send(Update::TaskStarted {
+                    label: "theme changed notification".into(),
                 })?;
             }
             Ok(Request::TraverseHistory { amount }) => {

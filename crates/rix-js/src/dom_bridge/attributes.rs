@@ -1,6 +1,27 @@
 
 use super::*;
 
+fn attribute_may_affect_style(name: &str) -> bool {
+    !matches!(
+        name,
+        "aria-label"
+            | "aria-describedby"
+            | "aria-labelledby"
+            | "aria-live"
+            | "aria-atomic"
+            | "aria-busy"
+            | "aria-relevant"
+            | "aria-keyshortcuts"
+            | "aria-roledescription"
+            | "aria-valuenow"
+            | "aria-valuemin"
+            | "aria-valuemax"
+            | "aria-valuetext"
+            | "title"
+            | "alt"
+    )
+}
+
 pub(super) fn element_get_attribute_records(
     this: &JsValue,
     _args: &[JsValue],
@@ -150,7 +171,9 @@ pub(super) fn element_set_attribute_record(
                 let mut doc = document.borrow_mut();
                 if doc.is_connected(node_id) {
                     doc.bump_revision();
-                    doc.bump_style_revision();
+                    if attribute_may_affect_style(&local_name) {
+                        doc.bump_style_revision();
+                    }
                     if matches!(doc.get(node_id), Some(NodeData::Element(e)) if e.name.local.as_str() == "script") {
                         doc.bump_script_revision();
                     }
@@ -204,7 +227,9 @@ pub(super) fn element_remove_attribute_ns(
                 let mut doc = document.borrow_mut();
                 if doc.is_connected(node_id) {
                     doc.bump_revision();
-                    doc.bump_style_revision();
+                    if attribute_may_affect_style(&local_name) {
+                        doc.bump_style_revision();
+                    }
                     if matches!(doc.get(node_id), Some(NodeData::Element(e)) if e.name.local.as_str() == "script") {
                         doc.bump_script_revision();
                     }

@@ -586,37 +586,68 @@ pub(super) fn node_set_inner_html(
                 .owner_document(container)
                 .unwrap_or(state_ref.main_document)
         };
-        {
-            let mut state_mut = state.borrow_mut();
-            for &node in &added {
-                state_mut.set_subtree_owner_document(node, container_owner);
-            }
-        }
+        let is_connected = {
+            let doc = state.borrow().document.clone();
+            let connected = doc.borrow().is_connected(container);
+            connected
+        };
+
+        let mut custom_candidates = Vec::new();
+        let mut custom_instances = Vec::new();
+        let mut iframes = Vec::new();
+
         {
             let mut state_mut = state.borrow_mut();
             let doc_ref = state_mut.document.clone();
-            let doc_ref = doc_ref.borrow();
-            for root_node in &added {
-                for n in doc_ref.descendants(*root_node) {
-                    if let Some(NodeData::Element(el)) = doc_ref.get(n) {
-                        if el.name.ns.as_str() == "http://www.w3.org/1999/xhtml"
-                            && el.name.local.as_str() == "script"
-                        {
-                            state_mut.mark_script_started(n);
+            let doc = doc_ref.borrow();
+            let mut pending = added.clone();
+            while let Some(node) = pending.pop() {
+                state_mut.owner_documents.insert(node, container_owner);
+                if let Some(NodeData::Element(element)) = doc.get(node) {
+                    if element.name.ns.as_str() == "http://www.w3.org/1999/xhtml" {
+                        if element.name.local.as_str() == "script" {
+                            state_mut.mark_script_started(node);
+                        } else if element.name.local.as_str() == "iframe" {
+                            iframes.push(node);
                         }
                     }
+                    let is_custom_candidate = element.name.local.contains('-');
+                    let is_instance = state_mut.custom_element_instances.contains_key(&node);
+                    if is_custom_candidate {
+                        custom_candidates.push(node);
+                    }
+                    if is_instance {
+                        custom_instances.push(node);
+                    }
+                    if let Some(shadow_root) = element.shadow_root {
+                        pending.push(shadow_root);
+                    }
+                    if let Some(template_fragment) = element.template_contents {
+                        pending.push(template_fragment);
+                    }
                 }
+                pending.extend(doc.children(node).rev());
             }
         }
+
         record_child_mutation(context, container, &added, &removed, None, None)?;
         for node in &removed {
             super::custom_elements::notify_disconnected_subtree(*node, context);
         }
-        for node in &added {
-            super::custom_elements::notify_connected_subtree(*node, context)?;
+        for node in custom_candidates {
+            super::custom_elements::register_candidate(node, context)?;
+            if is_connected {
+                super::custom_elements::notify_connected_node(node, context);
+            }
         }
-        super::script::prepare_connected_scripts(&added, context)?;
-        super::iframe::prepare_connected_iframes(&added, context)?;
+        if is_connected {
+            for node in custom_instances {
+                super::custom_elements::notify_connected_node(node, context);
+            }
+        }
+        for iframe in iframes {
+            let _ = super::iframe::ensure_iframe_context(iframe, context)?;
+        }
         Ok(JsValue::undefined())
     })
 }

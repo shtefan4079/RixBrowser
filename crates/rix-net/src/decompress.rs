@@ -82,7 +82,7 @@ fn decompress_body_limited(
             read_capped(&mut decoder, "Deflate", limit)
         }
         ContentEncoding::Brotli => {
-            let mut reader = brotli::Decompressor::new(data, 4096);
+            let mut reader = brotli::Decompressor::new(data, 65536);
             read_capped(&mut reader, "Brotli", limit)
         }
     }
@@ -236,7 +236,7 @@ impl StreamingDecoder {
                     started: false,
                 }),
                 ContentEncoding::Brotli => layers.push(StreamingLayer::Brotli(Box::new(
-                    brotli::DecompressorWriter::new(Vec::new(), 4096),
+                    brotli::DecompressorWriter::new(Vec::new(), 65536),
                 ))),
             }
         }

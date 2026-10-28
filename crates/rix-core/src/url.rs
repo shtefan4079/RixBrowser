@@ -53,7 +53,16 @@ impl RixUrl {
             return Err(RixError::InvalidUrl("Empty URL input".into()));
         }
 
-        if trimmed.contains("://") || trimmed.starts_with("about:") {
+        if trimmed.starts_with("rix://") || trimmed.starts_with("about:") {
+            return Self::parse(trimmed);
+        }
+
+        if trimmed.starts_with("rix:") {
+            let fixed = format!("rix://{}", trimmed.trim_start_matches("rix:").trim_start_matches('/'));
+            return Self::parse(&fixed);
+        }
+
+        if trimmed.contains("://") {
             return Self::parse(trimmed);
         }
 
@@ -84,6 +93,13 @@ impl RixUrl {
         }
         let host = self.inner.host_str().unwrap_or("");
         matches!(host, "chrome" | "settings" | "history" | "bookmarks" | "devtools")
+    }
+
+    pub fn is_internal(&self) -> bool {
+        matches!(
+            self.scheme(),
+            RixScheme::Rix | RixScheme::About
+        )
     }
 
     pub fn as_str(&self) -> &str {

@@ -5,9 +5,42 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
-static MEDIA_QUERY_CACHE: OnceLock<RwLock<HashMap<(u64, u32, u32), bool>>> = OnceLock::new();
+static MEDIA_QUERY_CACHE: OnceLock<RwLock<HashMap<(u64, u32, u32, u8), bool>>> = OnceLock::new();
 static SUPPORTS_QUERY_CACHE: OnceLock<RwLock<HashMap<u64, bool>>> = OnceLock::new();
 static INLINE_STYLE_CACHE: OnceLock<RwLock<HashMap<String, Arc<Vec<Declaration>>>>> = OnceLock::new();
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorScheme {
+    Light,
+    Dark,
+}
+
+static PREFERRED_COLOR_SCHEME: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn set_preferred_color_scheme(scheme: ColorScheme) {
+    let val = match scheme {
+        ColorScheme::Dark => 0,
+        ColorScheme::Light => 1,
+    };
+    PREFERRED_COLOR_SCHEME.store(val, std::sync::atomic::Ordering::Relaxed);
+    clear_media_query_cache();
+}
+
+pub fn preferred_color_scheme() -> ColorScheme {
+    if PREFERRED_COLOR_SCHEME.load(std::sync::atomic::Ordering::Relaxed) == 1 {
+        ColorScheme::Light
+    } else {
+        ColorScheme::Dark
+    }
+}
+
+pub fn clear_media_query_cache() {
+    if let Some(cache) = MEDIA_QUERY_CACHE.get() {
+        if let Ok(mut guard) = cache.write() {
+            guard.clear();
+        }
+    }
+}
 
 #[inline]
 fn css_query_hash(s: &str) -> u64 {
@@ -620,10 +653,12 @@ pub fn matches_media_query(query: &str, viewport_width: f32, viewport_height: f3
     if q.is_empty() {
         return true;
     }
+    let scheme_byte = if preferred_color_scheme() == ColorScheme::Dark { 0 } else { 1 };
     let key = (
         css_query_hash(q),
         viewport_width.to_bits(),
         viewport_height.to_bits(),
+        scheme_byte,
     );
     let cache = MEDIA_QUERY_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
     if let Ok(guard) = cache.read() {
@@ -846,7 +881,11 @@ fn eval_media_prop(prop: &str, val: &str, vw: f32, vh: f32) -> bool {
         "resolution" | "min-resolution" | "max-resolution" => eval_resolution(prop, val),
         "color" | "min-color" | "max-color" | "monochrome" | "min-monochrome"
         | "max-monochrome" => eval_color_depth(prop, val),
-        "prefers-color-scheme" => val.trim() == "light",
+        "prefers-color-scheme" => match val.trim() {
+            "dark" => preferred_color_scheme() == ColorScheme::Dark,
+            "light" => preferred_color_scheme() == ColorScheme::Light,
+            _ => false,
+        },
         "forced-colors" => val.trim() == "none",
         "inverted-colors" => val.trim() == "none",
         "prefers-reduced-motion" => val.trim() == "no-preference",
@@ -1507,10 +1546,20 @@ pub fn default_user_agent_stylesheet() -> Arc<StyleSheet> {
         }
         input[type=color] { align-content: center; }
         svg, img, iframe, video { display: inline-block; }
+        svg { fill: currentColor; }
+        svg:not(:root) { overflow: hidden; }
+        dialog:not([open]) { display: none; }
+        dialog[open], dialog:modal { position: fixed; inset: 0px; margin: auto; }
         iframe { border: 2px inset; }
         head, style, title, script, meta, link, noscript, template { display: none !important; }
         input[type="hidden"], input[type=hidden] { display: none !important; }
-        [hidden] { display: none !important; }
+        [hidden] { display: none; }
+        @media (prefers-color-scheme: dark) {
+            html { color: #f1f1f1; background-color: #0f0f0f; }
+            input, textarea { background-color: #222222; color: #f1f1f1; border-color: #555555; }
+            input[type=reset], input[type=button], input[type=submit], button { background-color: #333333; color: #f1f1f1; border-color: #555555; }
+            a { color: #8ab4f8; }
+        }
     "#;
             StyleSheet::parse(ua_css)
         })

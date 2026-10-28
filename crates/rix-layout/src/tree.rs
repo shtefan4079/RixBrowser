@@ -52,6 +52,23 @@ impl LayoutTree {
         Self::default()
     }
 
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            boxes: Vec::with_capacity(capacity),
+            root: None,
+            inline_contexts: Vec::new(),
+            node_to_box: HashMap::with_capacity(capacity),
+            inline_context_map: HashMap::new(),
+        }
+    }
+
+    pub fn push(&mut self, mut box_data: LayoutBoxData) -> LayoutBoxId {
+        let id = LayoutBoxId(self.boxes.len());
+        box_data.id = id;
+        self.boxes.push(box_data);
+        id
+    }
+
     pub fn len(&self) -> usize {
         self.boxes.len()
     }
@@ -240,7 +257,7 @@ impl LayoutTree {
         root_node: NodeId,
         styles: &HashMap<NodeId, ComputedStyle>,
     ) -> Self {
-        let mut tree = Self::new();
+        let mut tree = Self::with_capacity(styles.len());
         if let Some(root_box) = tree.build_box_recursive(doc, root_node, None, styles) {
             tree.root = Some(root_box);
         }

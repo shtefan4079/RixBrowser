@@ -60,10 +60,37 @@ impl BrowserShell {
 
         self.web_surface = web_surface;
 
-        let display_list =
-            DisplayList::build_from_layout_with_dom(&layout_tree, Some(&doc), &self.font_database);
+        let (scroll_node, scroll_y) = if self.is_active_internal() {
+            let active_id = self.active_tab_id();
+            let y = self.pages.get(&active_id).map(|p| p.scroll_y).unwrap_or(0.0);
+            let node = doc.query_selector(doc.root(), "#internal-viewport");
+            (node, y)
+        } else {
+            (None, 0.0)
+        };
+        self.internal_scroll_y = scroll_y;
+
+        let display_list = DisplayList::build_from_layout_with_dom_and_scroll(
+            &layout_tree,
+            Some(&doc),
+            &self.font_database,
+            scroll_node,
+            0.0,
+            scroll_y,
+        );
+        let mut base_list = DisplayList::new();
+        let mut overlay_list = DisplayList::new();
+        for item in display_list.items {
+            if item.z_index >= 1000 {
+                overlay_list.items.push(item);
+            } else {
+                base_list.items.push(item);
+            }
+        }
         self.compositor
-            .set_layer_display_list(self.chrome_layer_id, display_list);
+            .set_layer_display_list(self.chrome_layer_id, base_list);
+        self.compositor
+            .set_layer_display_list(self.overlay_layer_id, overlay_list);
         self.needs_redraw = true;
 
         self.layout_tree = Some(layout_tree);
@@ -134,6 +161,15 @@ impl BrowserShell {
     }
 
     pub fn apply_customization_to_chrome(&mut self) -> Result<(), ShellError> {
+        let theme_str = self.shell_theme();
+        let scheme = match theme_str.as_str() {
+            "light" => rix_css::ColorScheme::Light,
+            _ => rix_css::ColorScheme::Dark,
+        };
+        rix_css::set_preferred_color_scheme(scheme);
+        rix_css::clear_media_query_cache();
+        self.http_client.set_preferred_color_scheme(&theme_str);
+        rix_js::web_api::set_shared_network_client(self.http_client.clone());
         let theme = match self.customization.theme_mode() {
             ThemeMode::Dark => Some("dark"),
             ThemeMode::Light => Some("light"),
@@ -168,6 +204,40 @@ impl BrowserShell {
                     element.set_attribute("class", &classes.join(" "));
                 }
             }
+        }
+        for page in self.pages.values_mut() {
+            let root = page.document.root();
+            if let Some(html_id) = page.document.query_selector(root, "html") {
+                if let Some(NodeData::Element(elem)) = page.document.get_mut(html_id) {
+                    if page.url.contains("youtube.com") || page.url.contains("youtu.be") {
+                        if theme_str == "dark" {
+                            elem.set_attribute("dark", "");
+                        } else {
+                            elem.remove_attribute("dark");
+                        }
+                    }
+                }
+            }
+            page.document.bump_style_revision();
+            page.document.bump_revision();
+            if let Some(worker) = &page.page_worker {
+                worker.borrow().set_theme(&theme_str);
+            }
+            let viewport = page.layout_viewport;
+            page.layout_tree = compute_page_layout(
+                &page.document,
+                &page.url,
+                &page.external_stylesheets,
+                viewport.0,
+                viewport.1,
+                &self.font_database,
+            );
+            page.display_list = DisplayList::build_from_layout_with_dom(
+                &page.layout_tree,
+                Some(&page.document),
+                &self.font_database,
+            );
+            page.display_revision = next_page_display_revision();
         }
         let _ = self.runtime.evaluate("if (typeof updateChromeToggleLabels === 'function') updateChromeToggleLabels();");
         self.needs_redraw = true;
@@ -204,9 +274,16 @@ impl BrowserShell {
             let doc = self.document.borrow();
             (doc.revision(), doc.style_revision())
         };
+        let internal_scroll = if self.is_active_internal() {
+            let active_id = self.active_tab_id();
+            self.pages.get(&active_id).map(|p| p.scroll_y).unwrap_or(0.0)
+        } else {
+            0.0
+        };
         if style_revision != self.chrome_style_revision
             || self.chrome_font_resources != ChromeFontResources::capture(&self.font_database)
             || chrome_revision != self.chrome_dom_revision
+            || (internal_scroll - self.internal_scroll_y).abs() > 0.1
         {
             let _ = self.recompute_layout();
         }
@@ -217,10 +294,19 @@ impl BrowserShell {
 
         let active_tab_id = self.priv_state.borrow().active_tab_id;
         let surface_bounds = self.web_surface.bounds;
+        let is_internal = self.is_active_internal();
+
+        if is_internal {
+            let current_scroll = self.pages.get(&active_tab_id).map(|p| p.scroll_y).unwrap_or(0.0);
+            if (current_scroll - self.internal_scroll_y).abs() > 0.1 {
+                let _ = self.recompute_layout();
+            }
+        }
         let page_layer_key = self.pages.get(&active_tab_id).map(|page| {
             (
                 active_tab_id,
                 page.display_revision,
+                is_internal,
                 surface_bounds.x.to_bits(),
                 surface_bounds.y.to_bits(),
                 surface_bounds.width.to_bits(),
@@ -230,42 +316,52 @@ impl BrowserShell {
             )
         });
         if self.surface_layer_key != page_layer_key {
-            let page_layer = self
-                .pages
-                .get(&active_tab_id)
-                .map(|page| {
-                    let mut canvas = DisplayList::new();
-                    let background = ["html", "body"]
-                        .into_iter()
-                        .find_map(|tag| {
-                            let node = page.document.query_selector(page.document.root(), tag)?;
-                            let color = page
-                                .layout_tree
-                                .iter()
-                                .find(|item| item.dom_node == Some(node))?
-                                .style
-                                .background_color;
-                            (color.a > 0.0).then_some(color)
-                        })
-                        .unwrap_or(rix_css::color::CssColor::WHITE);
-                    canvas.push(
-                        rix_render::display_list::DrawCommand::DrawRect {
-                            rect: surface_bounds,
-                            color: background,
-                            border_radius: 0.0,
-                        },
-                        i32::MIN,
-                    );
-                    let translated = translate_page_display_list(
-                        &page.display_list,
-                        surface_bounds,
-                        page.scroll_x,
-                        page.scroll_y,
-                    );
-                    canvas.items.extend(translated.items);
-                    canvas
-                })
-                .unwrap_or_else(|| self.web_surface.build_surface_display_list());
+            let page_layer = if self.is_active_internal() {
+                DisplayList::new()
+            } else {
+                self.pages
+                    .get(&active_tab_id)
+                    .map(|page| {
+                        let mut canvas = DisplayList::new();
+                        let background = ["html", "body"]
+                            .into_iter()
+                            .find_map(|tag| {
+                                let node = page.document.query_selector(page.document.root(), tag)?;
+                                let color = page
+                                    .layout_tree
+                                    .iter()
+                                    .find(|item| item.dom_node == Some(node))?
+                                    .style
+                                    .background_color;
+                                (color.a > 0.0).then_some(color)
+                            })
+                            .unwrap_or_else(|| {
+                                if rix_css::preferred_color_scheme() == rix_css::ColorScheme::Dark {
+                                    rix_css::color::CssColor::from_rgba_u8(15, 15, 15, 255)
+                                } else {
+                                    rix_css::color::CssColor::WHITE
+                                }
+                            });
+                        canvas.push(
+                            rix_render::display_list::DrawCommand::DrawRect {
+                                rect: surface_bounds,
+                                color: background,
+                                border_radius: 0.0,
+                                corner_radii: [0.0; 4],
+                            },
+                            i32::MIN,
+                        );
+                        let translated = translate_page_display_list(
+                            &page.display_list,
+                            surface_bounds,
+                            page.scroll_x,
+                            page.scroll_y,
+                        );
+                        canvas.items.extend(translated.items);
+                        canvas
+                    })
+                    .unwrap_or_else(|| self.web_surface.build_surface_display_list())
+            };
             self.compositor
                 .set_layer_display_list(self.surface_layer_id, page_layer);
             self.surface_layer_key = page_layer_key;

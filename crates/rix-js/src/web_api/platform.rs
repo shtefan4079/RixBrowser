@@ -403,6 +403,34 @@ pub fn register_standard_web_platform_apis(context: &mut Context) -> Result<(), 
             Object.setPrototypeOf(globalThis, Window.prototype);
         }
 
+        if (!globalThis.SpeechRecognition) {
+            class SpeechRecognition extends EventTarget {
+                constructor() {
+                    super();
+                    this.continuous = false;
+                    this.interimResults = false;
+                    this.lang = '';
+                    this.maxAlternatives = 1;
+                }
+                start() {}
+                stop() {}
+                abort() {}
+            }
+            globalThis.SpeechRecognition = SpeechRecognition;
+            globalThis.webkitSpeechRecognition = SpeechRecognition;
+        }
+
+        if (typeof navigator !== 'undefined' && !navigator.mediaDevices) {
+            navigator.mediaDevices = {
+                getUserMedia: function() {
+                    return Promise.reject(new DOMException('Media devices not supported', 'NotSupportedError'));
+                },
+                enumerateDevices: function() {
+                    return Promise.resolve([]);
+                }
+            };
+        }
+
         if (!Object.prototype.hasOwnProperty.call(globalThis, 'addEventListener')) {
             globalThis.addEventListener = function(type, listener, options) {
                 'use strict';

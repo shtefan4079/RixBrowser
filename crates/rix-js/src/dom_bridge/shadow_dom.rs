@@ -112,6 +112,24 @@ pub(super) fn element_get_shadow_root(
     Ok(root.map_or(JsValue::null(), |root| wrap_element(root, context).into()))
 }
 
+pub(super) fn element_get_assigned_slot(
+    this: &JsValue,
+    _args: &[JsValue],
+    context: &mut Context,
+) -> JsResult<JsValue> {
+    let node_id = get_node_id_from_this(this, context)?;
+    let state = context
+        .get_data::<Rc<RefCell<DomBridgeState>>>()
+        .cloned()
+        .ok_or_else(|| JsNativeError::error().with_message("DOM context unavailable"))?;
+    let document = state.borrow().document.clone();
+    let slot = {
+        let document = document.borrow();
+        document.assigned_slot_for(node_id)
+    };
+    Ok(slot.map_or(JsValue::null(), |slot| wrap_element(slot, context).into()))
+}
+
 pub(super) fn shadow_root_get_host(
     this: &JsValue,
     _args: &[JsValue],

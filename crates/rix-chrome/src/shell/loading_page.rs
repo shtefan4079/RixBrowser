@@ -280,8 +280,6 @@ const PAGE_STYLE: &str = r##"
   }
 "##;
 
-const RIX_MARK: &str = r##"<svg viewBox="0 0 32 32" aria-hidden="true"><path fill="currentColor" d="M6 4h11a9 9 0 0 1 4.6 16.73L27.4 28h-6.1L16.6 20.6H12V28H6V4Zm6 6v4.6h5a2.3 2.3 0 1 0 0-4.6h-5Z" /></svg>"##;
-
 const ALERT_ICON: &str = r##"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 2.7 20h18.6L12 3Z" /><path d="M12 9v5" /><path d="M12 17.3h0.01" /></svg>"##;
 
 fn theme_name(theme: &str) -> &str {
@@ -317,7 +315,6 @@ fn display_url(url: &str) -> &str {
 
 pub(super) fn loading_page_html(url: &str, theme: &str) -> String {
     let host = crate::content::html_escape(&display_host(url));
-    let url = crate::content::html_escape(display_url(url));
     let theme = crate::content::html_escape(theme_name(theme));
     format!(
         r##"<!DOCTYPE html>
@@ -327,38 +324,74 @@ pub(super) fn loading_page_html(url: &str, theme: &str) -> String {
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Loading {host}</title>
 <style>
-{style}
+  :root {{
+    --bg: #0f1117;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --line: rgba(255, 255, 255, 0.08);
+    color-scheme: dark;
+  }}
+  html[data-theme="light"] {{
+    --bg: #f6f8fa;
+    --text: #1f2328;
+    --muted: #656d76;
+    --accent: #0969da;
+    --line: rgba(0, 0, 0, 0.08);
+    color-scheme: light;
+  }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  html, body {{
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }}
+  .loader-wrapper {{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 16px;
+    user-select: none;
+  }}
+  .loader-spinner {{
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--line);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }}
+  @keyframes spin {{
+    to {{ transform: rotate(360deg); }}
+  }}
+  .loader-host {{
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }}
+  .loader-hint {{
+    font-size: 13px;
+    color: var(--muted);
+  }}
 </style>
 </head>
 <body>
-  <div class="page">
-    <div class="card" role="status" aria-live="polite">
-      <div class="brand">
-        <span class="mark" aria-hidden="true">{mark}</span>
-        <span class="brand-name">RixBrowser</span>
-      </div>
-      <div class="copy">
-        <h1>Opening <span class="host">{host}</span></h1>
-        <p class="url">{url}</p>
-      </div>
-      <div class="steps" role="img" aria-label="Loading stages: request, styles, scripts, ready">
-        <div class="step active"><span class="step-bar"></span><span class="step-label">Request</span></div>
-        <div class="step"><span class="step-bar"></span><span class="step-label">Styles</span></div>
-        <div class="step"><span class="step-bar"></span><span class="step-label">Scripts</span></div>
-        <div class="step"><span class="step-bar"></span><span class="step-label">Ready</span></div>
-      </div>
-      <p class="waiting">Waiting for the site to respond</p>
-    </div>
-    <p class="footer">RixBrowser · 0.1.0-alpha.1</p>
+  <div class="loader-wrapper" role="status" aria-live="polite">
+    <div class="loader-spinner"></div>
+    <div class="loader-host">{host}</div>
+    <div class="loader-hint">Connecting…</div>
   </div>
 </body>
 </html>
 "##,
         theme = theme,
-        style = PAGE_STYLE,
-        mark = RIX_MARK,
         host = host,
-        url = url,
     )
 }
 
@@ -401,7 +434,6 @@ pub(super) fn error_page_html(url: &str, error: &str, theme: &str) -> String {
         <a class="button secondary" href="https://www.google.com">Back to start</a>
       </div>
     </div>
-    <p class="footer">RixBrowser · 0.1.0-alpha.1</p>
   </div>
 </body>
 </html>

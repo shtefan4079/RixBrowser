@@ -15,7 +15,8 @@ pub(crate) const PIC_CAPACITY: usize = 4;
 /// A cached shape-to-slot mapping for a polymorphic inline cache.
 #[derive(Clone, Debug, Trace, Finalize)]
 pub(crate) struct CacheEntry {
-    /// A weak reference is kept to the shape to avoid the shape preventing deallocation.
+    #[unsafe_ignore_trace]
+    pub(crate) shape_addr: usize,
     pub(crate) shape: WeakShape,
     #[unsafe_ignore_trace]
     pub(crate) slot: Slot,
@@ -66,46 +67,44 @@ impl InlineCache {
 
         let mut entries = self.entries.borrow_mut();
 
-        // Add a new entry if there's space.
         if entries
             .try_push(CacheEntry {
+                shape_addr: shape.to_addr_usize(),
                 shape: shape.into(),
                 slot,
             })
             .is_err()
         {
-            // Polymorphic cache is full, transition to megamorphic.
             self.megamorphic.set(true);
             entries.clear();
         }
     }
 
-    /// Returns the cached `(Shape, Slot)` if a matching shape exists in the inline cache.
-    ///
-    /// Opportunistically cleans up stale weak shape references during lookup.
     pub(crate) fn get(&self, shape: &Shape) -> Option<(Shape, Slot)> {
         if self.megamorphic.get() {
             return None;
         }
 
         let mut entries = self.entries.borrow_mut();
-        let mut i = 0;
-        let mut result = None;
         let shape_addr = shape.to_addr_usize();
 
+        let mut i = 0;
         while i < entries.len() {
-            if let Some(upgraded) = entries[i].shape.upgrade() {
-                if upgraded.to_addr_usize() == shape_addr {
-                    result = Some((upgraded, entries[i].slot));
-                    break;
+            if entries[i].shape_addr == shape_addr {
+                if let Some(upgraded) = entries[i].shape.upgrade() {
+                    let slot = entries[i].slot;
+                    if i > 0 {
+                        entries.swap(0, i);
+                    }
+                    return Some((upgraded, slot));
+                } else {
+                    entries.swap_remove(i);
+                    continue;
                 }
-                i += 1;
-            } else {
-                // Opportunistically clean up stale weak shapes.
-                entries.swap_remove(i);
             }
+            i += 1;
         }
 
-        result
+        None
     }
 }

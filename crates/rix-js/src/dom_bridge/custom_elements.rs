@@ -203,14 +203,18 @@ fn custom_elements_define(
                 JsNativeError::typ()
                     .with_message("Custom element constructor must have an object prototype")
             })?;
-        let html_element = context
-            .global_object()
-            .get(js_string!("HTMLElement"), context)?
-            .as_object()
-            .ok_or_else(|| JsNativeError::error().with_message("HTMLElement constructor missing"))?
-            .get(js_string!("prototype"), context)?
-            .as_object()
-            .ok_or_else(|| JsNativeError::error().with_message("HTMLElement prototype missing"))?;
+        let html_element = if let Some(proto) = state.borrow().prototypes.as_ref().map(|p| p.html_element.clone()) {
+            proto
+        } else {
+            context
+                .global_object()
+                .get(js_string!("HTMLElement"), context)?
+                .as_object()
+                .ok_or_else(|| JsNativeError::error().with_message("HTMLElement constructor missing"))?
+                .get(js_string!("prototype"), context)?
+                .as_object()
+                .ok_or_else(|| JsNativeError::error().with_message("HTMLElement prototype missing"))?
+        };
         let mut parent = prototype.prototype();
         let mut extends_html_element = false;
         while let Some(current) = parent {
@@ -898,7 +902,7 @@ fn invoke_lifecycle(node: NodeId, name: &str, args: &[JsValue], context: &mut Co
     }
 }
 
-fn notify_connected_node(node: NodeId, context: &mut Context) {
+pub(super) fn notify_connected_node(node: NodeId, context: &mut Context) {
     let Some(state) = context.get_data::<Rc<RefCell<DomBridgeState>>>().cloned() else {
         return;
     };

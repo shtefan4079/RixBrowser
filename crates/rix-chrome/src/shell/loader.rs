@@ -97,7 +97,10 @@ pub(super) async fn load_navigation_content_progressive(
     policy: NavigationResourcePolicy,
     theme: &str,
 ) -> NavigationContent {
-    if requested_url == "rix://welcome" || requested_url == "about:blank" {
+    if requested_url == "rix://welcome"
+        || requested_url == "about:blank"
+        || requested_url.starts_with("rix://")
+    {
         return simple_navigation_content(
             requested_url,
             "<!doctype html><html><head><title></title></head><body></body></html>".to_string(),

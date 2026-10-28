@@ -14,6 +14,19 @@ enum DrainOutcome {
     Finished,
 }
 
+fn is_worker_trace() -> bool {
+    static TRACE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    match TRACE.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let active = std::env::var_os("RIX_WORKER_TRACE").is_some();
+            TRACE.store(if active { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+            active
+        }
+    }
+}
+
 pub struct EventLoop {
     state: Rc<RefCell<WebApiState>>,
     task_errors: Vec<String>,
@@ -182,7 +195,7 @@ impl EventLoop {
             }
         }
         let elapsed = started.elapsed();
-        if std::env::var_os("RIX_WORKER_TRACE").is_some() && elapsed >= Duration::from_millis(50) {
+        if is_worker_trace() && elapsed >= Duration::from_millis(50) {
             eprintln!(
                 "[rix-microtask-slow] elapsed={}ms drained={}",
                 elapsed.as_millis(),
@@ -752,7 +765,7 @@ impl EventLoop {
 
             if let Some(timer) = timer {
                 phase_started("timer callback");
-                let timer_trace = std::env::var_os("RIX_WORKER_TRACE").is_some();
+                let timer_trace = is_worker_trace();
                 let timer_started = Instant::now();
                 if timer_trace {
                     let source = match &timer.callback {
@@ -792,7 +805,7 @@ impl EventLoop {
                 }
             } else if let Some(callback) = timed_out_idle_callback {
                 phase_started("idle callback timeout");
-                let idle_trace = std::env::var_os("RIX_WORKER_TRACE").is_some();
+                let idle_trace = is_worker_trace();
                 if idle_trace {
                     eprintln!("[rix-timer] idle-timeout id={}", callback.id);
                 }
@@ -868,7 +881,7 @@ impl EventLoop {
                     self.report_task_error(error);
                 }
                 let idle_elapsed = idle_started.elapsed();
-                if std::env::var_os("RIX_WORKER_TRACE").is_some() && idle_elapsed >= Duration::from_millis(50) {
+                if is_worker_trace() && idle_elapsed >= Duration::from_millis(50) {
                     eprintln!(
                         "[rix-idle-slow] id={} callback={}ms",
                         callback.id,

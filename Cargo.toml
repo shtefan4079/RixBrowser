@@ -38,6 +38,9 @@ tokio = { version = "1.43", features = ["full"] }
 redb = "2.3"
 tempfile = "3.17"
 
+[profile.dev]
+debug = 1
+
 [profile.dev.package.boa_engine]
 opt-level = 2
 [profile.dev.package.boa_parser]
@@ -59,8 +62,10 @@ opt-level = 2
 
 [profile.release]
 opt-level = 3
-strip = "debuginfo"
+codegen-units = 1
 lto = "thin"
+panic = "abort"
+strip = "debuginfo"
 
 
 [patch.crates-io]

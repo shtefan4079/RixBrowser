@@ -247,6 +247,10 @@ pub struct ComputedStyle {
     pub left_percent: Option<f32>,
     pub aspect_ratio: Option<f32>,
     pub border_radius: f32,
+    pub border_top_left_radius: f32,
+    pub border_top_right_radius: f32,
+    pub border_bottom_right_radius: f32,
+    pub border_bottom_left_radius: f32,
     pub border_width: f32,
     pub border_color: CssColor,
     pub border_top_width: f32,
@@ -293,6 +297,11 @@ pub struct ComputedStyle {
     pub box_shadow: Option<BoxShadow>,
     pub variables: Arc<HashMap<String, String>>,
     pub object_fit: String,
+    pub fill: Option<CssColor>,
+    pub fill_is_current_color: bool,
+    pub stroke: Option<CssColor>,
+    pub stroke_is_current_color: bool,
+    pub stroke_width: f32,
     pub content: Option<String>,
     pub before: Option<Box<ComputedStyle>>,
     pub after: Option<Box<ComputedStyle>>,
@@ -315,8 +324,17 @@ impl ComputedStyle {
         adjusted.border_bottom_color = other.border_bottom_color;
         adjusted.border_left_color = other.border_left_color;
         adjusted.border_radius = other.border_radius;
+        adjusted.border_top_left_radius = other.border_top_left_radius;
+        adjusted.border_top_right_radius = other.border_top_right_radius;
+        adjusted.border_bottom_right_radius = other.border_bottom_right_radius;
+        adjusted.border_bottom_left_radius = other.border_bottom_left_radius;
         adjusted.box_shadow = other.box_shadow;
         adjusted.object_fit = other.object_fit.clone();
+        adjusted.fill = other.fill;
+        adjusted.fill_is_current_color = other.fill_is_current_color;
+        adjusted.stroke = other.stroke;
+        adjusted.stroke_is_current_color = other.stroke_is_current_color;
+        adjusted.stroke_width = other.stroke_width;
         adjusted.opacity = other.opacity;
         adjusted.cursor = other.cursor.clone();
         adjusted.pointer_events = other.pointer_events.clone();
@@ -324,6 +342,15 @@ impl ComputedStyle {
         adjusted.text_decoration_line = other.text_decoration_line.clone();
         adjusted.variables.clone_from(&other.variables);
         adjusted == *other
+    }
+
+    pub fn corner_radii(&self) -> (f32, f32, f32, f32) {
+        (
+            self.border_top_left_radius,
+            self.border_top_right_radius,
+            self.border_bottom_right_radius,
+            self.border_bottom_left_radius,
+        )
     }
 }
 
@@ -382,6 +409,10 @@ impl Default for ComputedStyle {
             left_percent: None,
             aspect_ratio: None,
             border_radius: 0.0,
+            border_top_left_radius: 0.0,
+            border_top_right_radius: 0.0,
+            border_bottom_right_radius: 0.0,
+            border_bottom_left_radius: 0.0,
             border_width: 0.0,
             border_color: CssColor::TRANSPARENT,
             border_top_width: 0.0,
@@ -428,6 +459,11 @@ impl Default for ComputedStyle {
             box_shadow: None,
             variables: Arc::new(HashMap::new()),
             object_fit: "fill".to_string(),
+            fill: None,
+            fill_is_current_color: false,
+            stroke: None,
+            stroke_is_current_color: false,
+            stroke_width: 1.0,
             content: None,
             before: None,
             after: None,

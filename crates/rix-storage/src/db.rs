@@ -447,6 +447,39 @@ impl StorageEngine {
         Ok(())
     }
 
+    pub fn delete_cookies_for_domain(&self, domain: &str) -> Result<usize> {
+        let clean_domain = domain.trim().trim_start_matches('.').to_lowercase();
+        let mut memory = self
+            .cookies
+            .memory
+            .lock()
+            .map_err(|_| StorageError::CookieProtection)?;
+        let matched: Vec<String> = memory
+            .iter()
+            .filter(|(_, cookie)| {
+                let c_domain = cookie.domain.trim_start_matches('.').to_lowercase();
+                c_domain == clean_domain
+                    || c_domain.ends_with(&format!(".{clean_domain}"))
+                    || clean_domain.ends_with(&format!(".{c_domain}"))
+            })
+            .map(|(row, _)| row.clone())
+            .collect();
+
+        let tx = self.db.begin_write()?;
+        for definition in [TABLE_COOKIES, TABLE_PROTECTED_COOKIES] {
+            let mut table = tx.open_table(definition)?;
+            for row in &matched {
+                let _ = table.remove(row.as_str());
+            }
+        }
+        tx.commit()?;
+
+        for row in &matched {
+            memory.remove(row);
+        }
+        Ok(matched.len())
+    }
+
     pub fn add_bookmark(
         &self,
         title: &str,

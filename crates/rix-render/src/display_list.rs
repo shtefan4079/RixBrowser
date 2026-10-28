@@ -35,6 +35,7 @@ pub enum DrawCommand {
         rect: Rect,
         color: CssColor,
         border_radius: f32,
+        corner_radii: [f32; 4],
     },
     DrawLinearGradient {
         rect: Rect,
@@ -49,6 +50,7 @@ pub enum DrawCommand {
         color: CssColor,
         width: f32,
         border_radius: f32,
+        corner_radii: [f32; 4],
     },
     DrawText {
         text: String,
@@ -113,10 +115,12 @@ impl DrawCommand {
                 rect,
                 color,
                 border_radius,
+                corner_radii,
             } => DrawCommand::DrawRect {
                 rect: translate_rect(*rect),
                 color: *color,
                 border_radius: *border_radius,
+                corner_radii: *corner_radii,
             },
             DrawCommand::DrawLinearGradient {
                 rect,
@@ -138,11 +142,13 @@ impl DrawCommand {
                 color,
                 width,
                 border_radius,
+                corner_radii,
             } => DrawCommand::DrawBorder {
                 rect: translate_rect(*rect),
                 color: *color,
                 width: *width,
                 border_radius: *border_radius,
+                corner_radii: *corner_radii,
             },
             DrawCommand::DrawText {
                 text,
@@ -308,6 +314,17 @@ impl DisplayList {
         doc: Option<&Document>,
         font_db: &FontDatabase,
     ) -> Self {
+        Self::build_from_layout_with_dom_and_scroll(tree, doc, font_db, None, 0.0, 0.0)
+    }
+
+    pub fn build_from_layout_with_dom_and_scroll(
+        tree: &LayoutTree,
+        doc: Option<&Document>,
+        font_db: &FontDatabase,
+        scroll_node: Option<rix_dom::NodeId>,
+        scroll_x: f32,
+        scroll_y: f32,
+    ) -> Self {
         let mut list = Self::new();
         let viewport_overflow_owner = rix_layout::overflow::viewport_overflow_owner(tree, doc);
         if let Some(root_id) = tree.root {
@@ -320,8 +337,12 @@ impl DisplayList {
                 doc,
                 0,
                 viewport_overflow_owner,
+                scroll_node,
+                scroll_x,
+                scroll_y,
             );
         }
+        list.sort_by_stacking_order();
         list
     }
 
@@ -335,6 +356,9 @@ impl DisplayList {
         doc: Option<&Document>,
         depth: usize,
         viewport_overflow_owner: Option<rix_dom::NodeId>,
+        scroll_node: Option<rix_dom::NodeId>,
+        scroll_x: f32,
+        scroll_y: f32,
     ) {
         let box_data = match tree.get(box_id) {
             Some(b) => b,
@@ -349,7 +373,15 @@ impl DisplayList {
         let paint_visible = box_data.style.visibility == "visible";
 
         let rect = box_data.dimensions.border_box();
-        let current_z = current_z.saturating_add(box_data.style.z_index);
+        let current_z = if box_data.style.position == "fixed" {
+            if box_data.style.z_index != 0 {
+                box_data.style.z_index.max(current_z)
+            } else {
+                current_z
+            }
+        } else {
+            current_z.saturating_add(box_data.style.z_index)
+        };
 
         let is_text_box = matches!(box_data.box_type, AnonymousBoxType::Text(_));
 
@@ -393,12 +425,15 @@ impl DisplayList {
             && box_data.style.background_color != CssColor::TRANSPARENT
             && box_data.style.background_color.a > 0.001
         {
+            let (tl, tr, br, bl) = box_data.style.corner_radii();
+            let corner_radii = [tl, tr, br, bl];
             if box_data.inline_fragments.is_empty() {
                 list.push(
                     DrawCommand::DrawRect {
                         rect,
                         color: box_data.style.background_color,
                         border_radius: box_data.style.border_radius,
+                        corner_radii,
                     },
                     current_z,
                 );
@@ -409,6 +444,7 @@ impl DisplayList {
                             rect: *fragment,
                             color: box_data.style.background_color,
                             border_radius: box_data.style.border_radius,
+                            corner_radii,
                         },
                         current_z,
                     );
@@ -476,6 +512,13 @@ impl DisplayList {
                 && colors.iter().all(|color| *color == colors[0]);
             if uniform && widths[0] > 0.0 && colors[0].a > 0.001 {
                 let bw = widths[0];
+                let (tl, tr, br, bl) = style.corner_radii();
+                let corner_radii = [
+                    (tl - bw / 2.0).max(0.0),
+                    (tr - bw / 2.0).max(0.0),
+                    (br - bw / 2.0).max(0.0),
+                    (bl - bw / 2.0).max(0.0),
+                ];
                 list.push(
                     DrawCommand::DrawBorder {
                         rect: Rect::new(
@@ -487,6 +530,7 @@ impl DisplayList {
                         color: colors[0],
                         width: bw,
                         border_radius: (style.border_radius - bw / 2.0).max(0.0),
+                        corner_radii,
                     },
                     current_z,
                 );
@@ -514,6 +558,7 @@ impl DisplayList {
                                 rect: side,
                                 color,
                                 border_radius: 0.0,
+                                corner_radii: [0.0; 4],
                             },
                             current_z,
                         );
@@ -569,6 +614,7 @@ impl DisplayList {
                                     ..selection_color
                                 },
                                 border_radius: 0.0,
+                                corner_radii: [0.0; 4],
                             },
                             current_z,
                         );
@@ -597,6 +643,7 @@ impl DisplayList {
                                     rect,
                                     color: box_data.style.color,
                                     border_radius: 0.0,
+                                    corner_radii: [0.0; 4],
                                 },
                                 current_z,
                             );
@@ -718,52 +765,60 @@ impl DisplayList {
                         }
                     }
                 } else if tag == "svg" {
-                    let content_rect = box_data.dimensions.content;
-                    let vb = elem
-                        .get_attribute("viewBox")
-                        .or_else(|| elem.get_attribute("viewbox"))
-                        .and_then(rix_dom::svg::SvgViewBox::parse)
-                        .unwrap_or(rix_dom::svg::SvgViewBox {
-                            min_x: 0.0,
-                            min_y: 0.0,
-                            width: content_rect.width.max(1.0),
-                            height: content_rect.height.max(1.0),
-                        });
+                    let style_attr = elem.get_attribute("style").unwrap_or_default();
+                    let is_explicit_zero = (style_attr.contains("width: 0") || style_attr.contains("width:0") || elem.get_attribute("width") == Some("0"))
+                        && (style_attr.contains("height: 0") || style_attr.contains("height:0") || elem.get_attribute("height") == Some("0"));
+                    if !is_explicit_zero {
+                        let content_rect = box_data.dimensions.content;
+                        let vb = elem
+                            .get_attribute("viewBox")
+                            .or_else(|| elem.get_attribute("viewbox"))
+                            .and_then(rix_dom::svg::SvgViewBox::parse)
+                            .unwrap_or(rix_dom::svg::SvgViewBox {
+                                min_x: 0.0,
+                                min_y: 0.0,
+                                width: content_rect.width.max(1.0),
+                                height: content_rect.height.max(1.0),
+                            });
 
-                    let preserve = elem
-                        .get_attribute("preserveAspectRatio")
-                        .or_else(|| elem.get_attribute("preserveaspectratio"))
-                        .map(rix_dom::svg::SvgPreserveAspectRatio::parse)
-                        .unwrap_or_default();
+                        let preserve = elem
+                            .get_attribute("preserveAspectRatio")
+                            .or_else(|| elem.get_attribute("preserveaspectratio"))
+                            .map(rix_dom::svg::SvgPreserveAspectRatio::parse)
+                            .unwrap_or_default();
 
-                    let (scale_x, scale_y, offset_x, offset_y) = preserve.compute_transform(
-                        &vb,
-                        content_rect.width,
-                        content_rect.height,
-                    );
-
-                    let origin_x = content_rect.x + offset_x;
-                    let origin_y = content_rect.y + offset_y;
-
-                    for child_id in doc.children(dom_id) {
-                        render_svg_element_or_use(
-                            doc,
-                            child_id,
-                            dom_id,
-                            origin_x,
-                            origin_y,
-                            vb.min_x,
-                            vb.min_y,
-                            scale_x,
-                            scale_y,
-                            0.0,
-                            0.0,
-                            box_data.style.color,
-                            current_z,
-                            list,
-                            false,
-                            0,
+                        let (scale_x, scale_y, offset_x, offset_y) = preserve.compute_transform(
+                            &vb,
+                            content_rect.width,
+                            content_rect.height,
                         );
+
+                        let origin_x = content_rect.x + offset_x;
+                        let origin_y = content_rect.y + offset_y;
+
+                        for child_id in doc.children(dom_id) {
+                            render_svg_element_or_use(
+                                doc,
+                                child_id,
+                                dom_id,
+                                origin_x,
+                                origin_y,
+                                vb.min_x,
+                                vb.min_y,
+                                scale_x,
+                                scale_y,
+                                0.0,
+                                0.0,
+                                box_data.style.color,
+                                box_data.style.fill,
+                                box_data.style.stroke,
+                                box_data.style.stroke_width,
+                                current_z,
+                                list,
+                                false,
+                                0,
+                            );
+                        }
                     }
                 } else if tag == "iframe" {
                     if let Some(content_doc_root) = elem.content_document {
@@ -783,53 +838,89 @@ impl DisplayList {
 
         if box_data.children.is_empty() {
             
-        } else if box_data.children.len() == 1 {
-            Self::build_box_recursive(
-                tree,
-                box_data.children[0],
-                current_z,
-                list,
-                font_db,
-                doc,
-                depth,
-                viewport_overflow_owner,
-            );
         } else {
-            let has_z_index = box_data
-                .children
-                .iter()
-                .any(|&child_id| tree.get(child_id).is_some_and(|child| child.style.z_index != 0));
-            if !has_z_index {
+            let is_scrolling_container = scroll_node.is_some()
+                && box_data.dom_node == scroll_node
+                && (scroll_x != 0.0 || scroll_y != 0.0);
+
+            if is_scrolling_container {
+                let mut sub_list = DisplayList::new();
                 for &child_id in &box_data.children {
                     Self::build_box_recursive(
                         tree,
                         child_id,
                         current_z,
-                        list,
+                        &mut sub_list,
                         font_db,
                         doc,
-                        depth,
+                        depth + 1,
                         viewport_overflow_owner,
+                        scroll_node,
+                        scroll_x,
+                        scroll_y,
                     );
                 }
+                let translated = sub_list.translate(-scroll_x, -scroll_y);
+                for item in translated.items {
+                    list.push(item.command, item.z_index);
+                }
+            } else if box_data.children.len() == 1 {
+                Self::build_box_recursive(
+                    tree,
+                    box_data.children[0],
+                    current_z,
+                    list,
+                    font_db,
+                    doc,
+                    depth + 1,
+                    viewport_overflow_owner,
+                    scroll_node,
+                    scroll_x,
+                    scroll_y,
+                );
             } else {
-                let mut children = box_data.children.clone();
-                children.sort_by_key(|child_id| {
-                    tree.get(*child_id)
-                        .map(|child| child.style.z_index)
-                        .unwrap_or(0)
-                });
-                for child_id in children {
-                    Self::build_box_recursive(
-                        tree,
-                        child_id,
-                        current_z,
-                        list,
-                        font_db,
-                        doc,
-                        depth,
-                        viewport_overflow_owner,
-                    );
+                let has_z_index = box_data
+                    .children
+                    .iter()
+                    .any(|&child_id| tree.get(child_id).is_some_and(|child| child.style.z_index != 0));
+                if !has_z_index {
+                    for &child_id in &box_data.children {
+                        Self::build_box_recursive(
+                            tree,
+                            child_id,
+                            current_z,
+                            list,
+                            font_db,
+                            doc,
+                            depth + 1,
+                            viewport_overflow_owner,
+                            scroll_node,
+                            scroll_x,
+                            scroll_y,
+                        );
+                    }
+                } else {
+                    let mut children = box_data.children.clone();
+                    children.sort_by_key(|child_id| {
+                        tree.get(*child_id)
+                            .map(|child| child.style.z_index)
+                            .unwrap_or(0)
+                    });
+                    for child_id in children {
+                        Self::build_box_recursive(
+                            tree,
+                            child_id,
+                            current_z,
+                            list,
+                            font_db,
+                            doc,
+                            depth + 1,
+                            viewport_overflow_owner,
+                            scroll_node,
+                            scroll_x,
+                            scroll_y,
+                        );
+                    }
                 }
             }
         }
@@ -911,8 +1002,11 @@ impl DisplayList {
                 &mut sub_list,
                 font_db,
                 Some(doc),
-                depth,
+                depth + 1,
                 None,
+                None,
+                0.0,
+                0.0,
             );
         }
 
@@ -1029,6 +1123,7 @@ fn resolve_svg_fill(
     node: rix_dom::NodeId,
     svg_root: rix_dom::NodeId,
     default_color: CssColor,
+    inherited_fill: Option<CssColor>,
 ) -> Option<CssColor> {
     let fill_val = resolve_svg_attribute(doc, node, svg_root, "fill");
     match fill_val {
@@ -1042,7 +1137,7 @@ fn resolve_svg_fill(
                 CssColor::parse(trimmed)
             }
         }
-        None => Some(CssColor::BLACK),
+        None => inherited_fill.or(Some(default_color)),
     }
 }
 
@@ -1051,6 +1146,7 @@ fn resolve_svg_stroke(
     node: rix_dom::NodeId,
     svg_root: rix_dom::NodeId,
     default_color: CssColor,
+    inherited_stroke: Option<CssColor>,
 ) -> Option<CssColor> {
     let stroke_val = resolve_svg_attribute(doc, node, svg_root, "stroke");
     match stroke_val {
@@ -1064,7 +1160,7 @@ fn resolve_svg_stroke(
                 CssColor::parse(trimmed)
             }
         }
-        None => None,
+        None => inherited_stroke,
     }
 }
 
@@ -1072,10 +1168,11 @@ fn resolve_svg_stroke_width(
     doc: &Document,
     node: rix_dom::NodeId,
     svg_root: rix_dom::NodeId,
+    inherited_width: f32,
 ) -> f32 {
     resolve_svg_attribute(doc, node, svg_root, "stroke-width")
         .and_then(|w| w.trim().trim_end_matches("px").parse::<f32>().ok())
-        .unwrap_or(1.0)
+        .unwrap_or(inherited_width)
 }
 
 fn resolve_svg_fill_rule(
@@ -1126,6 +1223,9 @@ fn render_svg_element_or_use(
     offset_x: f32,
     offset_y: f32,
     box_color: CssColor,
+    box_fill: Option<CssColor>,
+    box_stroke: Option<CssColor>,
+    box_stroke_width: f32,
     current_z: i32,
     list: &mut DisplayList,
     is_use_instance: bool,
@@ -1171,6 +1271,9 @@ fn render_svg_element_or_use(
                     offset_x + use_x,
                     offset_y + use_y,
                     box_color,
+                    box_fill,
+                    box_stroke,
+                    box_stroke_width,
                     current_z,
                     list,
                     true,
@@ -1182,9 +1285,9 @@ fn render_svg_element_or_use(
     }
 
     if let Some(d) = rix_dom::svg::svg_element_to_path_d(elem) {
-        let mut fill = resolve_svg_fill(doc, element_id, svg_root, box_color);
-        let mut stroke = resolve_svg_stroke(doc, element_id, svg_root, box_color);
-        let stroke_width = resolve_svg_stroke_width(doc, element_id, svg_root);
+        let mut fill = resolve_svg_fill(doc, element_id, svg_root, box_color, box_fill);
+        let mut stroke = resolve_svg_stroke(doc, element_id, svg_root, box_color, box_stroke);
+        let stroke_width = resolve_svg_stroke_width(doc, element_id, svg_root, box_stroke_width);
         let fill_rule = resolve_svg_fill_rule(doc, element_id, svg_root);
         let (opacity, fill_opacity, stroke_opacity) =
             resolve_svg_opacities(doc, element_id, svg_root);
@@ -1208,7 +1311,7 @@ fn render_svg_element_or_use(
                 stroke,
                 stroke_width,
             },
-            current_z + 1,
+            current_z,
         );
     } else if tag == "g" || tag == "svg" || tag == "symbol" {
         let (child_scale_x, child_scale_y, child_min_x, child_min_y) = if tag == "symbol" || tag == "svg" {
@@ -1243,6 +1346,9 @@ fn render_svg_element_or_use(
                 offset_x,
                 offset_y,
                 box_color,
+                box_fill,
+                box_stroke,
+                box_stroke_width,
                 current_z,
                 list,
                 is_use_instance,

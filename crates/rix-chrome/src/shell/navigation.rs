@@ -184,10 +184,22 @@ impl BrowserShell {
         url: &str,
         html: &str,
         external_stylesheets: HashMap<String, String>,
-        doc: Document,
+        mut doc: Document,
         prepared_layout: Option<LayoutTree>,
     ) -> PageContent {
         let mut title = "New Tab".to_string();
+
+        let theme_str = self.shell_theme();
+        if theme_str == "dark" {
+            let root = doc.root();
+            if let Some(html_id) = doc.query_selector(root, "html") {
+                if let Some(NodeData::Element(elem)) = doc.get_mut(html_id) {
+                    if (url.contains("youtube.com") || url.contains("youtu.be")) && !elem.has_attribute("dark") {
+                        elem.set_attribute("dark", "");
+                    }
+                }
+            }
+        }
 
         for node_id in doc.descendants(doc.root()) {
             if let Some(NodeData::Element(elem)) = doc.get(node_id) {
@@ -280,7 +292,14 @@ impl BrowserShell {
         if trimmed.is_empty() {
             return "about:blank".to_string();
         }
-        if trimmed.contains("://") || trimmed.starts_with("about:") {
+        if trimmed.starts_with("rix://") || trimmed.starts_with("about:") {
+            return trimmed.to_string();
+        }
+        if trimmed.starts_with("rix:") {
+            let fixed = format!("rix://{}", trimmed.trim_start_matches("rix:").trim_start_matches('/'));
+            return fixed;
+        }
+        if trimmed.contains("://") {
             return RixUrl::parse(trimmed)
                 .map(|url| url.to_string())
                 .unwrap_or_else(|_| trimmed.to_string());
@@ -346,6 +365,38 @@ impl BrowserShell {
             let request = self.prepare_navigation(tab_id, target_url, None);
             let bounds = self.web_surface.bounds;
             let theme = self.shell_theme();
+            let scheme = if theme == "dark" {
+                rix_css::ColorScheme::Dark
+            } else {
+                rix_css::ColorScheme::Light
+            };
+            rix_css::set_preferred_color_scheme(scheme);
+            self.http_client.set_preferred_color_scheme(&theme);
+            if let Some(storage) = self.storage.as_ref().or_else(|| self.http_client.storage()) {
+                if target_url.contains("youtube.com") {
+                    let pref_val = if theme == "dark" { "f6=400" } else { "f6=8" };
+                    let _ = storage.set_cookie(rix_storage::models::Cookie {
+                        name: "PREF".to_string(),
+                        value: pref_val.to_string(),
+                        domain: ".youtube.com".to_string(),
+                        path: "/".to_string(),
+                        expires_at: Some(u64::MAX / 2),
+                        secure: true,
+                        http_only: false,
+                        same_site: rix_storage::models::SameSitePolicy::Lax,
+                    });
+                    let _ = storage.set_cookie(rix_storage::models::Cookie {
+                        name: "SOCS".to_string(),
+                        value: "CAISFAgDEgoxMDA2OTk3NTE5GgJlbiABGgYIgNP_1gY".to_string(),
+                        domain: ".youtube.com".to_string(),
+                        path: "/".to_string(),
+                        expires_at: Some(u64::MAX / 2),
+                        secure: true,
+                        http_only: false,
+                        same_site: rix_storage::models::SameSitePolicy::Lax,
+                    });
+                }
+            }
             let content = Box::pin(load_navigation_content(
                 self.http_client.clone(),
                 &request.url,
@@ -411,10 +462,35 @@ impl BrowserShell {
             self.omnibox_selection = TextSelection::collapsed(self.omnibox_text.chars().count());
             self.set_chrome_omnibox_value(&url);
         }
-        let loading_html = loading_page_html(&url, &self.shell_theme());
+        let is_internal = url.starts_with("rix://") || url == "about:blank";
+        let default_title = if is_internal {
+            if url.contains("bookmarks") {
+                "Bookmarks".to_string()
+            } else if url.contains("history") {
+                "History".to_string()
+            } else if url.contains("downloads") {
+                "Downloads".to_string()
+            } else if url.contains("shortcuts") {
+                "Shortcuts".to_string()
+            } else if url.contains("settings") {
+                "Settings".to_string()
+            } else {
+                "New Tab".to_string()
+            }
+        } else {
+            "Loading…".to_string()
+        };
+        let loading_html = if is_internal {
+            format!("<!doctype html><html><head><title>{default_title}</title></head><body></body></html>")
+        } else {
+            loading_page_html(&url, &self.shell_theme())
+        };
         let mut loading_page = self.build_page_from_html(&url, &loading_html);
-        loading_page.is_loading = true;
-        loading_page.status_message = "Requesting page…".to_string();
+        loading_page.title.clone_from(&default_title);
+        loading_page.is_loading = !is_internal;
+        if !is_internal {
+            loading_page.status_message = "Requesting page…".to_string();
+        }
         if let Some(tab) = self
             .priv_state
             .borrow_mut()
@@ -579,6 +655,7 @@ impl BrowserShell {
             self.omnibox_selection = TextSelection::collapsed(self.omnibox_text.chars().count());
             self.set_chrome_omnibox_value(&self.omnibox_text.clone());
         }
+        self.notify_chrome_tabs_changed();
 
         if let Some(command) = &self.page_worker_command {
             let parser_source_resource_count = final_page
@@ -632,6 +709,7 @@ impl BrowserShell {
                 page_visible,
                 cookies,
                 local_storage,
+                Some(self.shell_theme()),
             ) {
                 Ok(worker) => {
                     final_page.worker_layout_sync = WorkerLayoutSync {
@@ -833,6 +911,38 @@ impl BrowserShell {
             return;
         }
         let theme = self.shell_theme();
+        let scheme = if theme == "dark" {
+            rix_css::ColorScheme::Dark
+        } else {
+            rix_css::ColorScheme::Light
+        };
+        rix_css::set_preferred_color_scheme(scheme);
+        self.http_client.set_preferred_color_scheme(&theme);
+        if let Some(storage) = self.storage.as_ref().or_else(|| self.http_client.storage()) {
+            if request.url.contains("youtube.com") {
+                let pref_val = if theme == "dark" { "f6=400" } else { "f6=8" };
+                let _ = storage.set_cookie(rix_storage::models::Cookie {
+                    name: "PREF".to_string(),
+                    value: pref_val.to_string(),
+                    domain: ".youtube.com".to_string(),
+                    path: "/".to_string(),
+                    expires_at: Some(u64::MAX / 2),
+                    secure: true,
+                    http_only: false,
+                    same_site: rix_storage::models::SameSitePolicy::Lax,
+                });
+                let _ = storage.set_cookie(rix_storage::models::Cookie {
+                    name: "SOCS".to_string(),
+                    value: "CAISFAgDEgoxMDA2OTk3NTE5GgJlbiABGgYIgNP_1gY".to_string(),
+                    domain: ".youtube.com".to_string(),
+                    path: "/".to_string(),
+                    expires_at: Some(u64::MAX / 2),
+                    secure: true,
+                    http_only: false,
+                    same_site: rix_storage::models::SameSitePolicy::Lax,
+                });
+            }
+        }
         let Ok(target) = RixUrl::parse(&request.url) else {
             let url = request.url.clone();
             let html = error_page_html(
@@ -844,6 +954,31 @@ impl BrowserShell {
             self.finish_navigation(request, content);
             return;
         };
+        if target.is_internal()
+            || request.url.starts_with("rix://")
+            || request.url == "about:blank"
+        {
+            let url = request.url.clone();
+            let default_title = if url.contains("bookmarks") {
+                "Bookmarks"
+            } else if url.contains("history") {
+                "History"
+            } else if url.contains("downloads") {
+                "Downloads"
+            } else if url.contains("shortcuts") {
+                "Shortcuts"
+            } else if url.contains("settings") {
+                "Settings"
+            } else {
+                "New Tab"
+            };
+            let html = format!(
+                "<!doctype html><html><head><title>{default_title}</title></head><body></body></html>"
+            );
+            let content = simple_navigation_content(&url, html, "Internal page");
+            self.finish_navigation(request, content);
+            return;
+        }
         if !matches!(
             target.scheme(),
             rix_core::url::RixScheme::Http | rix_core::url::RixScheme::Https

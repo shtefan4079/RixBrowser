@@ -2,10 +2,23 @@ use super::*;
 
 impl BrowserShell {
     pub fn click_at(&mut self, x: f32, y: f32) -> Option<ClickAction> {
-        if self.web_surface.contains(x, y) {
+        let hit_chrome_overlay = self.layout_tree.as_ref().and_then(|lt| {
+            let node = rix_layout::hit_test::hit_test_tree(lt, x, y)?;
+            let doc = self.document.borrow();
+            let is_overlay = std::iter::once(node).chain(doc.ancestors(node)).any(|n| {
+                matches!(doc.get(n), Some(NodeData::Element(el)) if matches!(el.get_attribute("id"), Some("site-info-popup" | "tab-context-menu" | "more-menu" | "omnibox-suggestions" | "command-palette")) || matches!(el.get_attribute("class"), Some(c) if c.contains("site-info-popup") || c.contains("context-menu") || c.contains("more-menu") || c.contains("omnibox-suggestions")))
+            });
+            is_overlay.then_some(node)
+        });
+
+        if !self.is_active_internal() && self.web_surface.contains(x, y) && hit_chrome_overlay.is_none() {
             return self
                 .page_action_at(x, y)
                 .or(Some(ClickAction::UnfocusOmnibox));
+        }
+
+        if hit_chrome_overlay.is_some() {
+            return None;
         }
 
         let target = {
@@ -18,13 +31,15 @@ impl BrowserShell {
             if let Some(NodeData::Element(element)) = doc.get(node_id) {
                 match element.get_attribute("id") {
                     Some("omnibox") => return Some(ClickAction::FocusOmnibox),
-                    Some("new-tab-btn") => return Some(ClickAction::NewTab),
+                    Some("new-tab-btn") | Some("sidebar-add-tab-btn") => return Some(ClickAction::NewTab),
                     Some("theme-toggle") => return Some(ClickAction::ToggleTheme),
-                    Some("tabs-orientation-toggle") => return Some(ClickAction::ToggleTabOrientation),
+                    Some("tabs-orientation-toggle")
+                    | Some("rix-toggle-sidebar")
+                    | Some("toolbar-toggle-sidebar") => return Some(ClickAction::ToggleTabOrientation),
                     Some("nav-back") => return Some(ClickAction::NavBack),
                     Some("nav-forward") => return Some(ClickAction::NavForward),
                     Some("nav-reload") => return Some(ClickAction::NavReload),
-                    Some("nav-home") => {
+                    Some("nav-home") | Some("brand-home-btn") => {
                         return Some(ClickAction::NavigateUrl(self.homepage.clone()))
                     }
                     _ => {}
@@ -180,6 +195,23 @@ impl BrowserShell {
         self.priv_state.borrow().active_tab_id
     }
 
+    pub fn is_active_internal(&self) -> bool {
+        let active_id = self.active_tab_id();
+        if let Some(tab) = self.priv_state.borrow().tabs.iter().find(|t| t.id == active_id) {
+            let u = tab.url.trim();
+            return u.is_empty()
+                || u.starts_with("rix://")
+                || u == "about:blank";
+        }
+        if let Some(page) = self.pages.get(&active_id) {
+            let u = page.url.trim();
+            return u.is_empty()
+                || u.starts_with("rix://")
+                || u == "about:blank";
+        }
+        true
+    }
+
     pub fn refresh_in_page_display(&mut self, tab_id: u32) {
         if tab_id == self.active_tab_id() {
             self.refresh_active_page_render_data();
@@ -259,10 +291,10 @@ impl BrowserShell {
                     }
                 }
             }
-            crate::server::ControlMessage::Click { x, y, resp } => {
-                let action = self.click_at(x, y);
+            crate::server::ControlMessage::Click { x, y, button, resp } => {
+                let action = if button == 0 { self.click_at(x, y) } else { None };
                 let _ = self
-                    .handle_input(IpcInputEvent::MouseDown { x, y, button: 0 })
+                    .handle_input(IpcInputEvent::MouseDown { x, y, button })
                     .await;
                 let _ = resp.send(Ok(serde_json::json!({
                     "ok": true,
@@ -334,11 +366,94 @@ impl BrowserShell {
             }
             crate::server::ControlMessage::GetDom { resp } => {
                 let active_id = self.priv_state.borrow().active_tab_id;
-                let (title, is_loading, text_snippet, node_count) = if let Some(p) = self.pages.get(&active_id)
+                let mut dialog_boxes = Vec::new();
+                let (title, is_loading, text_snippet, node_count, display_items) = if let Some(p) = self.pages.get(&active_id)
                 {
-                    (p.title.clone(), p.is_loading, String::new(), p.node_count)
+                    for b in p.layout_tree.boxes() {
+                        let elem_info = b.dom_node.and_then(|id| p.document.get(id)).and_then(|n| match n {
+                            NodeData::Element(e) => Some((e.name.local.to_string(), e.get_attribute("id").unwrap_or("").to_string(), e.get_attribute("class").unwrap_or("").to_string())),
+                            _ => None,
+                        });
+                        if let Some((tag, id, class)) = elem_info {
+                            let parent_elem = b.dom_node
+                                .and_then(|nid| p.document.parent(nid))
+                                .and_then(|pid| p.document.get(pid))
+                                .and_then(|n| match n {
+                                    NodeData::Element(e) => Some(format!("{}:#{}", e.name.local, e.get_attribute("id").unwrap_or(""))),
+                                    _ => None,
+                                });
+                            if tag.contains("dialog") || tag.contains("lightbox") || tag.contains("consent") || id.contains("content") || id.contains("dialog") || tag == "tp-yt-iron-overlay-backdrop" || tag.contains("masthead") || id.contains("masthead") || id == "end" || id == "center" || id == "start" || id == "buttons" || tag.contains("search") || tag.contains("topbar") || tag == "ytd-app" || (b.dimensions.border_box().y < 60.0 && b.dimensions.border_box().height > 0.0 && b.dimensions.border_box().width > 0.0) {
+                                dialog_boxes.push(serde_json::json!({
+                                    "tag": tag,
+                                    "id": id,
+                                    "class": class,
+                                    "parent": parent_elem,
+                                    "text": match &b.box_type {
+                                        rix_layout::AnonymousBoxType::Text(t) => Some(t.clone()),
+                                        _ => None,
+                                    },
+                                    "content_rect": [b.dimensions.content.x, b.dimensions.content.y, b.dimensions.content.width, b.dimensions.content.height],
+                                    "border_rect": [b.dimensions.border_box().x, b.dimensions.border_box().y, b.dimensions.border_box().width, b.dimensions.border_box().height],
+                                    "bg": format!("{:?}", b.style.background_color),
+                                    "color": format!("{:?}", b.style.color),
+                                    "display": format!("{:?}", b.style.display),
+                                    "pos": b.style.position,
+                                    "overflow_y": b.style.overflow_y,
+                                    "opacity": b.style.opacity,
+                                    "visibility": b.style.visibility,
+                                    "z": b.style.z_index,
+                                    "child_count": b.children.len(),
+                                }));
+                            }
+                        }
+                    }
+                    let items_summary = p.display_list.items.iter().map(|item| {
+                        let desc = match &item.command {
+                            rix_render::display_list::DrawCommand::DrawRect { rect, color, .. } => {
+                                format!("Rect [{}, {}, {}, {}] {:?}", rect.x, rect.y, rect.width, rect.height, color)
+                            }
+                            rix_render::display_list::DrawCommand::DrawText { text, x, y, color, font_size, .. } => {
+                                format!("Text '{}' at ({}, {}) sz={} {:?}", text, x, y, font_size, color)
+                            }
+                            rix_render::display_list::DrawCommand::DrawGlyphs { glyphs, x, y } => {
+                                format!("Glyphs count={} at ({}, {})", glyphs.len(), x, y)
+                            }
+                            rix_render::display_list::DrawCommand::DrawPath { d, x, y, fill, stroke, .. } => {
+                                format!("Path len={} at ({}, {}) fill={:?} stroke={:?}", d.len(), x, y, fill, stroke)
+                            }
+                            rix_render::display_list::DrawCommand::DrawBorder { rect, color, width, .. } => {
+                                format!("Border [{}, {}, {}, {}] w={} {:?}", rect.x, rect.y, rect.width, rect.height, width, color)
+                            }
+                            rix_render::display_list::DrawCommand::PushClip { rect } => {
+                                format!("PushClip [{}, {}, {}, {}]", rect.x, rect.y, rect.width, rect.height)
+                            }
+                            rix_render::display_list::DrawCommand::PopClip => "PopClip".to_string(),
+                            rix_render::display_list::DrawCommand::PushOpacity { opacity } => {
+                                format!("PushOpacity {}", opacity)
+                            }
+                            rix_render::display_list::DrawCommand::PopOpacity => "PopOpacity".to_string(),
+                            rix_render::display_list::DrawCommand::DrawImage { rect, src, .. } => {
+                                format!("Image [{}, {}, {}, {}] src={}", rect.x, rect.y, rect.width, rect.height, src)
+                            }
+                            rix_render::display_list::DrawCommand::DrawImageResource { rect, .. } => {
+                                format!("ImageRes [{}, {}, {}, {}]", rect.x, rect.y, rect.width, rect.height)
+                            }
+                            rix_render::display_list::DrawCommand::DrawShadow { rect, .. } => {
+                                format!("Shadow [{}, {}, {}, {}]", rect.x, rect.y, rect.width, rect.height)
+                            }
+                            rix_render::display_list::DrawCommand::DrawLinearGradient { rect, .. } => {
+                                format!("Gradient [{}, {}, {}, {}]", rect.x, rect.y, rect.width, rect.height)
+                            }
+                        };
+                        serde_json::json!({
+                            "z": item.z_index,
+                            "a": item.viewport_anchored,
+                            "c": desc,
+                        })
+                    }).collect::<Vec<_>>();
+                    (p.title.clone(), p.is_loading, String::new(), p.node_count, items_summary)
                 } else {
-                    (String::new(), false, String::new(), 0)
+                    (String::new(), false, String::new(), 0, Vec::new())
                 };
                 let _ = resp.send(Ok(serde_json::json!({
                     "active_tab": active_id,
@@ -347,6 +462,8 @@ impl BrowserShell {
                     "is_loading": is_loading,
                     "text_snippet": text_snippet,
                     "node_count": node_count,
+                    "dialog_boxes": dialog_boxes,
+                    "display_items": display_items,
                 })));
             }
             crate::server::ControlMessage::EvalJs { script, resp } => {

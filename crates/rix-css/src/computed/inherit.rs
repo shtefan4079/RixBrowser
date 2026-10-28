@@ -37,6 +37,17 @@ pub(super) fn apply_inherit(style: &mut ComputedStyle, parent: Option<&ComputedS
     match name {
         "display" => style.display = p.display,
         "color" => style.color = p.color,
+        "fill" => {
+            style.fill = p.fill;
+            style.fill_is_current_color = p.fill_is_current_color;
+        }
+        "stroke" => {
+            style.stroke = p.stroke;
+            style.stroke_is_current_color = p.stroke_is_current_color;
+        }
+        "stroke-width" => {
+            style.stroke_width = p.stroke_width;
+        }
         "background-color" => style.background_color = p.background_color,
         "background-image" => style.background_image.clone_from(&p.background_image),
         "background-repeat" => {
@@ -181,6 +192,17 @@ pub(super) fn apply_initial(style: &mut ComputedStyle, name: &str) {
     match name {
         "display" => style.display = d.display,
         "color" => style.color = d.color,
+        "fill" => {
+            style.fill = d.fill;
+            style.fill_is_current_color = d.fill_is_current_color;
+        }
+        "stroke" => {
+            style.stroke = d.stroke;
+            style.stroke_is_current_color = d.stroke_is_current_color;
+        }
+        "stroke-width" => {
+            style.stroke_width = d.stroke_width;
+        }
         "background-color" => style.background_color = d.background_color,
         "background-image" => style.background_image = None,
         "background-repeat" => {

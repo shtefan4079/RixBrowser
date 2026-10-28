@@ -90,6 +90,9 @@ impl WebSurface {
             self.node_id = Some(node);
             return Ok(());
         }
+        if self.bounds.width > 0.0 && self.bounds.height > 0.0 {
+            return Ok(());
+        }
         Err(SurfaceError::NotFound)
     }
 
@@ -241,6 +244,7 @@ impl WebSurface {
                     a: 1.0,
                 },
                 border_radius: 0.0,
+                corner_radii: [0.0; 4],
             },
             i32::MIN + 1,
         );

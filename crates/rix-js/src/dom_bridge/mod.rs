@@ -56,7 +56,8 @@ use element_query::*;
 pub use events::*;
 use font_loading::*;
 pub use layout::{
-    register_layout_api, run_layout_observers, ImageLoadState, LayoutHost, LayoutSnapshot,
+    notify_match_media, register_layout_api, run_layout_observers, ImageLoadState, LayoutHost,
+    LayoutSnapshot,
 };
 use mutation::*;
 use range::*;
@@ -693,6 +694,7 @@ fn register_dom_interfaces(context: &mut Context) -> JsResult<()> {
             ("getAttributeNames", 0, element_get_attribute_names),
             ("attachShadow", 1, shadow_dom::element_attach_shadow),
             ("__getShadowRoot", 0, shadow_dom::element_get_shadow_root),
+            ("__getAssignedSlot", 0, shadow_dom::element_get_assigned_slot),
             (
                 "__getAttributeRecords",
                 0,
@@ -901,6 +903,7 @@ fn register_dom_interfaces(context: &mut Context) -> JsResult<()> {
             property(Element.prototype, 'className', function() { return this.getAttribute('class') || ''; }, function(value) { this.setAttribute('class', String(value)); });
             property(Element.prototype, 'classList', function() { return this.__getClassList(); });
             property(Element.prototype, 'shadowRoot', function() { return this.__getShadowRoot(); });
+            property(Element.prototype, 'assignedSlot', function() { return this.__getAssignedSlot(); });
             property(HTMLElement.prototype, 'hidden',
                 function() {
                     const value = this.getAttribute('hidden');

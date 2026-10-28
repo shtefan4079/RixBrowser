@@ -6,7 +6,7 @@ use rix_text::layout::LayoutGlyph;
 use rix_text::shaping::TextShaper;
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use vello::kurbo::{Affine, BezPath, Rect, RoundedRect, Stroke};
+use vello::kurbo::{Affine, BezPath, Rect, RoundedRect, RoundedRectRadii, Stroke};
 use vello::peniko::{
     BlendMode, Blob, Color, Fill, FontData as PenikoFontData, Gradient, ImageAlphaType, ImageBrush,
     ImageData as PenikoImageData, ImageFormat, InterpolationAlphaSpace,
@@ -46,6 +46,7 @@ impl VelloSceneBuilder {
                     rect,
                     color,
                     border_radius,
+                    corner_radii,
                 } => {
                     let fill_color = Self::convert_color(*color);
                     if rect.width <= 0.0 || rect.height <= 0.0 {
@@ -55,7 +56,16 @@ impl VelloSceneBuilder {
                     let y0 = rect.y as f64;
                     let x1 = (rect.x + rect.width) as f64;
                     let y1 = (rect.y + rect.height) as f64;
-                    if *border_radius > 0.0 {
+                    let has_corner_radii = corner_radii.iter().any(|&r| r > 0.0);
+                    if has_corner_radii {
+                        let max_r = (rect.width.min(rect.height) / 2.0) as f64;
+                        let tl = (corner_radii[0] as f64).clamp(0.0, max_r);
+                        let tr = (corner_radii[1] as f64).clamp(0.0, max_r);
+                        let br = (corner_radii[2] as f64).clamp(0.0, max_r);
+                        let bl = (corner_radii[3] as f64).clamp(0.0, max_r);
+                        let rounded = RoundedRect::new(x0, y0, x1, y1, RoundedRectRadii::new(tl, tr, br, bl));
+                        scene.fill(Fill::NonZero, current_transform, fill_color, None, &rounded);
+                    } else if *border_radius > 0.0 {
                         let radius = (*border_radius as f64)
                             .clamp(0.0, (rect.width.min(rect.height) / 2.0) as f64);
                         let rounded = RoundedRect::new(x0, y0, x1, y1, radius);
@@ -201,6 +211,7 @@ impl VelloSceneBuilder {
                     color,
                     width,
                     border_radius,
+                    corner_radii,
                 } => {
                     if rect.width <= 0.0 || rect.height <= 0.0 || *width <= 0.0 {
                         continue;
@@ -212,7 +223,16 @@ impl VelloSceneBuilder {
                     let x1 = (rect.x + rect.width) as f64;
                     let y1 = (rect.y + rect.height) as f64;
 
-                    if *border_radius > 0.0 {
+                    let has_corner_radii = corner_radii.iter().any(|&r| r > 0.0);
+                    if has_corner_radii {
+                        let max_r = (rect.width.min(rect.height) / 2.0) as f64;
+                        let tl = (corner_radii[0] as f64).clamp(0.0, max_r);
+                        let tr = (corner_radii[1] as f64).clamp(0.0, max_r);
+                        let br = (corner_radii[2] as f64).clamp(0.0, max_r);
+                        let bl = (corner_radii[3] as f64).clamp(0.0, max_r);
+                        let rounded = RoundedRect::new(x0, y0, x1, y1, RoundedRectRadii::new(tl, tr, br, bl));
+                        scene.stroke(&stroke, current_transform, stroke_color, None, &rounded);
+                    } else if *border_radius > 0.0 {
                         let radius = (*border_radius as f64)
                             .clamp(0.0, (rect.width.min(rect.height) / 2.0) as f64);
                         let rounded = RoundedRect::new(x0, y0, x1, y1, radius);

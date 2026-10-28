@@ -146,6 +146,7 @@ fn atomic_baseline(
     height: f32,
     block_style: &ComputedStyle,
     metrics: Option<(f32, f32, f32)>,
+    natural_baseline: f32,
 ) -> f32 {
     let (ascent, descent, x_height) = metrics.unwrap_or((
         block_style.font_size * 0.8,
@@ -158,8 +159,9 @@ fn atomic_baseline(
         "text-bottom" => height - descent,
         "sub" => height - block_style.font_size * 0.2,
         "super" => height + block_style.font_size * 0.2,
+        "baseline" => natural_baseline,
         other => vertical_align_shift(other, block_style.font_size, block_style.line_height)
-            .map_or(height, |shift| height + shift),
+            .map_or(natural_baseline, |shift| natural_baseline + shift),
     }
 }
 
@@ -184,6 +186,7 @@ pub(crate) struct AtomicSize {
     pub(crate) border_width: f32,
     pub(crate) border_height: f32,
     pub(crate) margin: EdgeSizes,
+    pub(crate) baseline: Option<f32>,
 }
 
 impl AtomicSize {
@@ -280,11 +283,21 @@ pub(crate) fn compute_paragraph(
                     .get(id)
                     .map(String::as_str)
                     .unwrap_or("baseline");
+                let natural_baseline = size
+                    .baseline
+                    .map(|b| b + size.margin.top)
+                    .unwrap_or(height);
                 content.push(ParagraphItem::InlineObject(InlineObjectMetrics {
                     id: id.0,
                     width,
                     height,
-                    baseline: atomic_baseline(alignment, height, block_style, parent_metrics),
+                    baseline: atomic_baseline(
+                        alignment,
+                        height,
+                        block_style,
+                        parent_metrics,
+                        natural_baseline,
+                    ),
                 }));
             }
             InlineFlowItem::InlineStart(_)

@@ -71,6 +71,37 @@ pub(super) fn apply_declaration(    style: &mut ComputedStyle,
                 style.color = c;
             }
         }
+        "fill" => {
+            if trimmed.eq_ignore_ascii_case("currentColor") {
+                style.fill = Some(style.color);
+                style.fill_is_current_color = true;
+            } else if trimmed.eq_ignore_ascii_case("none") {
+                style.fill = None;
+                style.fill_is_current_color = false;
+            } else if let Some(c) = CssColor::parse(trimmed) {
+                style.fill = Some(c);
+                style.fill_is_current_color = false;
+            }
+        }
+        "stroke" => {
+            if trimmed.eq_ignore_ascii_case("currentColor") {
+                style.stroke = Some(style.color);
+                style.stroke_is_current_color = true;
+            } else if trimmed.eq_ignore_ascii_case("none") {
+                style.stroke = None;
+                style.stroke_is_current_color = false;
+            } else if let Some(c) = CssColor::parse(trimmed) {
+                style.stroke = Some(c);
+                style.stroke_is_current_color = false;
+            }
+        }
+        "stroke-width" => {
+            if let Some(px) = resolve_length(trimmed, style.font_size, ctx) {
+                style.stroke_width = px;
+            } else if let Ok(val) = trimmed.trim_end_matches("px").parse::<f32>() {
+                style.stroke_width = val;
+            }
+        }
         "background-color" => {
             if let Some(c) = CssColor::parse(trimmed) {
                 style.background_color = c;
@@ -431,6 +462,38 @@ pub(super) fn apply_declaration(    style: &mut ComputedStyle,
                 apply_declaration(style, property, value, ctx);
             }
         }
+        "inset-block-start" => apply_declaration(style, "top", trimmed, ctx),
+        "inset-block-end" => apply_declaration(style, "bottom", trimmed, ctx),
+        "inset-inline-start" => apply_declaration(style, "left", trimmed, ctx),
+        "inset-inline-end" => apply_declaration(style, "right", trimmed, ctx),
+        "inset-block" => {
+            let parts = split_whitespace_preserve_parens(trimmed);
+            match parts.as_slice() {
+                [all] => {
+                    apply_declaration(style, "top", all, ctx);
+                    apply_declaration(style, "bottom", all, ctx);
+                }
+                [start, end] => {
+                    apply_declaration(style, "top", start, ctx);
+                    apply_declaration(style, "bottom", end, ctx);
+                }
+                _ => {}
+            }
+        }
+        "inset-inline" => {
+            let parts = split_whitespace_preserve_parens(trimmed);
+            match parts.as_slice() {
+                [all] => {
+                    apply_declaration(style, "left", all, ctx);
+                    apply_declaration(style, "right", all, ctx);
+                }
+                [start, end] => {
+                    apply_declaration(style, "left", start, ctx);
+                    apply_declaration(style, "right", end, ctx);
+                }
+                _ => {}
+            }
+        }
         "top" | "right" | "bottom" | "left" => {
             let (length, percent) = if trimmed.eq_ignore_ascii_case("auto") {
                 (None, None)
@@ -517,8 +580,73 @@ pub(super) fn apply_declaration(    style: &mut ComputedStyle,
             style.box_sizing = trimmed.to_lowercase();
         }
         "border-radius" => {
-            if let Some(px) = resolve_length(trimmed, style.font_size, ctx) {
-                style.border_radius = px;
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            let resolved: Vec<f32> = parts
+                .iter()
+                .filter_map(|p| resolve_radius_value(p, style.font_size, ctx))
+                .collect();
+            match resolved.len() {
+                1 => {
+                    let r = resolved[0];
+                    style.border_radius = r;
+                    style.border_top_left_radius = r;
+                    style.border_top_right_radius = r;
+                    style.border_bottom_right_radius = r;
+                    style.border_bottom_left_radius = r;
+                }
+                2 => {
+                    let (tl_br, tr_bl) = (resolved[0], resolved[1]);
+                    style.border_radius = tl_br.max(tr_bl);
+                    style.border_top_left_radius = tl_br;
+                    style.border_bottom_right_radius = tl_br;
+                    style.border_top_right_radius = tr_bl;
+                    style.border_bottom_left_radius = tr_bl;
+                }
+                3 => {
+                    let (tl, tr_bl, br) = (resolved[0], resolved[1], resolved[2]);
+                    style.border_radius = tl.max(tr_bl).max(br);
+                    style.border_top_left_radius = tl;
+                    style.border_top_right_radius = tr_bl;
+                    style.border_bottom_left_radius = tr_bl;
+                    style.border_bottom_right_radius = br;
+                }
+                4 => {
+                    let (tl, tr, br, bl) = (resolved[0], resolved[1], resolved[2], resolved[3]);
+                    style.border_radius = tl.max(tr).max(br).max(bl);
+                    style.border_top_left_radius = tl;
+                    style.border_top_right_radius = tr;
+                    style.border_bottom_right_radius = br;
+                    style.border_bottom_left_radius = bl;
+                }
+                _ => {
+                    if let Some(px) = resolve_radius_value(trimmed, style.font_size, ctx) {
+                        style.border_radius = px;
+                        style.border_top_left_radius = px;
+                        style.border_top_right_radius = px;
+                        style.border_bottom_right_radius = px;
+                        style.border_bottom_left_radius = px;
+                    }
+                }
+            }
+        }
+        "border-top-left-radius" => {
+            if let Some(px) = resolve_radius_value(trimmed, style.font_size, ctx) {
+                style.border_top_left_radius = px;
+            }
+        }
+        "border-top-right-radius" => {
+            if let Some(px) = resolve_radius_value(trimmed, style.font_size, ctx) {
+                style.border_top_right_radius = px;
+            }
+        }
+        "border-bottom-right-radius" => {
+            if let Some(px) = resolve_radius_value(trimmed, style.font_size, ctx) {
+                style.border_bottom_right_radius = px;
+            }
+        }
+        "border-bottom-left-radius" => {
+            if let Some(px) = resolve_radius_value(trimmed, style.font_size, ctx) {
+                style.border_bottom_left_radius = px;
             }
         }
         "border-width" => {
@@ -907,4 +1035,13 @@ fn parse_content_string(token: &str) -> Option<String> {
         return None;
     }
     Some(text)
+}
+
+fn resolve_radius_value(val: &str, font_size: f32, ctx: &LayoutContext) -> Option<f32> {
+    let s = val.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        let p: f32 = pct.trim().parse().ok()?;
+        return Some(p * 200.0);
+    }
+    resolve_length(s, font_size, ctx)
 }

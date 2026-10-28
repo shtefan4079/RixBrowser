@@ -23,6 +23,8 @@ pub struct ScreenshotRequest {
 pub struct ClickRequest {
     pub x: f32,
     pub y: f32,
+    #[serde(default)]
+    pub button: u8,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,6 +74,7 @@ pub enum ControlMessage {
     Click {
         x: f32,
         y: f32,
+        button: u8,
         resp: oneshot::Sender<Result<serde_json::Value, String>>,
     },
     Type {
@@ -357,6 +360,7 @@ async fn handle_http_request(
                 .send(ControlMessage::Click {
                     x: req.x,
                     y: req.y,
+                    button: req.button,
                     resp: resp_tx,
                 })
                 .await

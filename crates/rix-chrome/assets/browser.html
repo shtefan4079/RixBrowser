@@ -3,75 +3,246 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RixBrowser</title>
+  <title>Rix</title>
   <link rel="stylesheet" href="browser.css" />
 </head>
 <body>
-  <div class="browser-shell" id="browser-shell">
-    <header class="chrome-header" role="banner">
-      <div class="tabs-region">
-        <div id="tab-bar" class="tab-bar" role="tablist" aria-label="Open tabs">
-          <div class="tab active" role="tab" aria-selected="true" data-tab-id="1" tabindex="0" title="New Tab">
-            <span class="tab-favicon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M5 3h9l5 5v13H5V3Zm2 2v14h10V9h-5V5H7Zm7 .8V7h1.2L14 5.8Z" /></svg></span>
-            <span class="tab-title">New Tab</span>
-            <span class="tab-loading" aria-hidden="true"></span>
-            <button class="tab-close" aria-label="Close tab" title="Close tab (Ctrl+W)"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z" /></svg></button>
+  <div class="rix-shell" id="browser-shell" data-theme="dark" data-sidebar="open" data-density="regular">
+    <aside class="rix-sidebar" id="rix-sidebar" aria-label="Sidebar">
+      <div class="sidebar-header">
+        <button id="brand-home-btn" class="brand-title-btn" title="Rix - Go to New Tab">
+          <span class="brand-title">Rix</span>
+        </button>
+        <button id="sidebar-toggle-btn" class="sidebar-toggle-btn" title="Collapse Sidebar (Ctrl+B)" aria-label="Collapse Sidebar">
+          <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+        </button>
+      </div>
+
+      <div class="tabs-scroll-region" id="tabs-scroll-region">
+        <div class="tab-section-header" id="pinned-header">
+          <span class="section-title">PINNED</span>
+        </div>
+        <div class="tabs-list pinned" id="tab-list-pinned" role="tablist" aria-label="Pinned Tabs"></div>
+
+        <div class="tab-section-header" id="open-header">
+          <span class="section-title">OPEN TABS</span>
+        </div>
+        <div class="tabs-list open" id="tab-list-open" role="tablist" aria-label="Open Tabs"></div>
+
+        <button id="sidebar-add-tab-btn" class="sidebar-new-tab-row" title="New Tab (Ctrl+T)">
+          <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+          <span class="sidebar-new-tab-label">New Tab</span>
+        </button>
+      </div>
+
+      <nav class="sidebar-footer" id="sidebar-footer" aria-label="Navigation">
+        <button class="footer-nav-btn" id="nav-btn-bookmarks" data-url="rix://bookmarks" title="Bookmarks (Ctrl+D)">
+          <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z"/></svg>
+          <span class="footer-btn-label">Bookmarks</span>
+        </button>
+        <button class="footer-nav-btn" id="nav-btn-history" data-url="rix://history" title="History (Ctrl+H)">
+          <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+          <span class="footer-btn-label">History</span>
+        </button>
+        <button class="footer-nav-btn" id="nav-btn-downloads" data-url="rix://downloads" title="Downloads (Ctrl+J)">
+          <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+          <span class="footer-btn-label">Downloads</span>
+        </button>
+        <button class="footer-nav-btn" id="nav-btn-shortcuts" data-url="rix://shortcuts" title="Shortcuts (Ctrl+/)">
+          <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 5H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-9 3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zm-1 2H5v-2h2v2zm0-3H5V8h2v2zm8 7H9v-2h6v2zm1-4h-2v-2h2v2zm0-3h-2V8h2v2zm3 3h-2v-2h2v2zm0-3h-2V8h2v2z"/></svg>
+          <span class="footer-btn-label">Shortcuts</span>
+        </button>
+        <button class="footer-nav-btn" id="nav-btn-settings" data-url="rix://settings" title="Settings (Ctrl+,)">
+          <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+          <span class="footer-btn-label">Settings</span>
+        </button>
+      </nav>
+    </aside>
+
+    <div class="rix-workspace" id="rix-workspace">
+      <header class="rix-toolbar" id="rix-toolbar" role="toolbar">
+        <div class="toolbar-nav-group">
+          <button id="nav-back" class="toolbar-btn" title="Back (Alt+Left)" aria-label="Back">
+            <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="m11 4 1.4 1.4L6.8 11H21v2H6.8l5.6 5.6L11 20l-8-8 8-8Z"/></svg>
+          </button>
+          <button id="nav-forward" class="toolbar-btn" title="Forward (Alt+Right)" aria-label="Forward">
+            <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="m13 4 8 8-8 8-1.4-1.4 5.6-5.6H3v-2h14.2l-5.6-5.6L13 4Z"/></svg>
+          </button>
+          <button id="nav-reload" class="toolbar-btn" title="Reload (Ctrl+R)" aria-label="Reload">
+            <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3a9 9 0 0 1 7 3.3V3h2v8h-8V9h5.3A7 7 0 1 0 19 13h2a9 9 0 1 1-9-10Z"/></svg>
+          </button>
+          <button id="nav-home" class="toolbar-btn" title="Home" aria-label="Home">
+            <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="m12 3 10 9-1.4 1.5L19 12.1V21h-6v-6h-2v6H5v-8.9l-1.6 1.4L2 12 12 3Zm0 2.7-5 4.5V19h2v-6h6v6h2v-8.8l-5-4.5Z"/></svg>
+          </button>
+        </div>
+
+        <div class="omnibox-container" id="omnibox-container">
+          <div class="omnibox-box" id="omnibox-box">
+            <button class="omnibox-security-btn" id="security-lock-btn" title="Site Information & Cookies" aria-label="Site Info">
+              <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 2a7 7 0 1 1 0 14 7 7 0 0 1 0-14Zm-1 5h2v6h-2v-6Zm0-3h2v2h-2V7Z"/></svg>
+            </button>
+            <input id="omnibox" type="text" class="omnibox-input" placeholder="Search Google or enter address" aria-label="Address Bar" autocomplete="off" spellcheck="false" />
+            <span class="omnibox-badge" id="security-badge">Internal</span>
+          </div>
+
+          <div class="site-info-popup" id="site-info-popup" hidden>
+            <div class="site-info-header">
+              <span class="site-info-domain" id="site-info-domain">rix://newtab</span>
+              <span class="site-info-status" id="site-info-status">Internal Browser Page</span>
+            </div>
+            <div class="site-info-body">
+              <div class="site-info-row">
+                <span class="site-info-label">Cookies for this site:</span>
+                <span class="site-info-count" id="site-cookie-count">0</span>
+              </div>
+              <button class="site-info-action-btn danger" id="btn-clear-tab-cookies">Clear Site Cookies & Data</button>
+            </div>
+          </div>
+
+          <div class="omnibox-suggestions" id="omnibox-suggestions" hidden>
+            <div class="suggestions-list" id="suggestions-list"></div>
           </div>
         </div>
-        <button id="new-tab-btn" class="icon-btn new-tab-btn" aria-label="New tab (Ctrl+T)" title="New tab (Ctrl+T)">
-          <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4Z" /></svg>
-        </button>
-      </div>
 
-      <div class="header-actions">
-        <button id="theme-toggle" class="icon-btn" aria-label="Toggle light / dark theme" title="Toggle theme">
-          <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2v16a8 8 0 0 1 0-16Z" /></svg>
-        </button>
-        <button id="tabs-orientation-toggle" class="icon-btn" aria-label="Toggle vertical tabs" title="Vertical tabs" aria-pressed="false">
-          <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 4h18v16H3V4Zm2 2v12h4V6H5Zm6 0v12h8V6h-8ZM6 8h2v2H6V8Zm0 4h2v2H6v-2Z" /></svg>
-        </button>
-      </div>
-    </header>
+        <div class="toolbar-actions-group">
+          <button id="btn-star" class="toolbar-btn" title="Bookmark this tab (Ctrl+D)" aria-label="Bookmark">
+            <svg class="ui-icon icon-star" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2Z"/></svg>
+          </button>
+          <button id="theme-toggle" class="toolbar-btn" title="Toggle Theme (Dark / Light)" aria-label="Theme">
+            <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2v16a8 8 0 0 1 0-16Z"/></svg>
+          </button>
+          <button id="btn-more" class="toolbar-btn" title="More options" aria-label="More">
+            <svg class="ui-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="12" r="2" fill="currentColor"/><circle cx="5" cy="12" r="2" fill="currentColor"/></svg>
+          </button>
 
-    <div class="browser-workspace">
-      <nav class="nav-bar" aria-label="Navigation">
-        <div class="nav-group">
-          <button id="nav-back" class="nav-btn" title="Back (Alt+Left)" aria-label="Back"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m11 4 1.4 1.4L6.8 11H21v2H6.8l5.6 5.6L11 20l-8-8 8-8Z" /></svg></button>
-          <button id="nav-forward" class="nav-btn" title="Forward (Alt+Right)" aria-label="Forward"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m13 4 8 8-8 8-1.4-1.4 5.6-5.6H3v-2h14.2l-5.6-5.6L13 4Z" /></svg></button>
-          <button id="nav-reload" class="nav-btn" title="Reload (Ctrl+R)" aria-label="Reload"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3a9 9 0 0 1 7 3.3V3h2v8h-8V9h5.3A7 7 0 1 0 19 13h2a9 9 0 1 1-9-10Z" /></svg></button>
-          <button id="nav-home" class="nav-btn" title="Home (Alt+Home)" aria-label="Home"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m12 3 10 9-1.4 1.5L19 12.1V21h-6v-6h-2v6H5v-8.9l-1.6 1.4L2 12 12 3Zm0 2.7-5 4.5V19h2v-6h6v6h2v-8.8l-5-4.5Z" /></svg></button>
+          <div class="more-menu-dropdown" id="more-menu" hidden>
+            <button class="more-menu-item" id="menu-new-tab">
+              <span class="item-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg></span>
+              <span class="item-title">New Tab</span>
+              <kbd class="item-shortcut">Ctrl+T</kbd>
+            </button>
+            <button class="more-menu-item" id="menu-duplicate">
+              <span class="item-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></span>
+              <span class="item-title">Duplicate Tab</span>
+            </button>
+            <button class="more-menu-item" id="menu-pin">
+              <span class="item-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z"/></svg></span>
+              <span class="item-title" id="menu-pin-label">Pin Tab</span>
+            </button>
+            <button class="more-menu-item" id="menu-copy-url">
+              <span class="item-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></span>
+              <span class="item-title">Copy URL</span>
+            </button>
+            <div class="menu-divider"></div>
+            <button class="more-menu-item" id="menu-bookmarks">
+              <span class="item-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z"/></svg></span>
+              <span class="item-title">Bookmarks</span>
+              <kbd class="item-shortcut">Ctrl+D</kbd>
+            </button>
+            <button class="more-menu-item" id="menu-history">
+              <span class="item-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg></span>
+              <span class="item-title">History</span>
+              <kbd class="item-shortcut">Ctrl+H</kbd>
+            </button>
+            <button class="more-menu-item" id="menu-downloads">
+              <span class="item-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg></span>
+              <span class="item-title">Downloads</span>
+              <kbd class="item-shortcut">Ctrl+J</kbd>
+            </button>
+            <button class="more-menu-item" id="menu-shortcuts">
+              <span class="item-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M20 5H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-9 3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zm-1 2H5v-2h2v2zm0-3H5V8h2v2zm8 7H9v-2h6v2zm1-4h-2v-2h2v2zm0-3h-2V8h2v2zm3 3h-2v-2h2v2zm0-3h-2V8h2v2z"/></svg></span>
+              <span class="item-title">Shortcuts</span>
+              <kbd class="item-shortcut">Ctrl+/</kbd>
+            </button>
+            <div class="menu-divider"></div>
+            <button class="more-menu-item" id="menu-settings">
+              <span class="item-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></span>
+              <span class="item-title">Settings</span>
+            </button>
+          </div>
         </div>
 
-        <div class="omnibox" role="search">
-          <span class="omnibox-lock" id="security-lock" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 2a7 7 0 1 1 0 14 7 7 0 0 1 0-14Zm-1 5h2v6h-2v-6Zm0-3h2v2h-2V7Z" /></svg></span>
-          <input id="omnibox" type="text" class="omnibox-input" placeholder="Search or enter address" aria-label="Address bar" autocomplete="off" spellcheck="false" />
-          <span class="omnibox-hint" aria-hidden="true">Ctrl L</span>
-          <span class="omnibox-badge" id="security-badge">Internal</span>
+        <div class="load-progress" id="load-progress" hidden aria-hidden="true">
+          <span class="load-progress-fill"></span>
         </div>
-
-        <span class="fps-badge" id="fps-badge" aria-hidden="true"></span>
-        <div class="load-progress" id="load-progress" hidden aria-hidden="true"><span class="load-progress-fill"></span></div>
-      </nav>
-
+      </header>
 
       <main class="viewport-container" id="viewport">
         <web-surface id="active-web-surface" aria-label="Web content"></web-surface>
+
+        <div class="internal-viewport" id="internal-viewport"></div>
+
         <div class="crash-overlay" id="crash-overlay" hidden>
           <div class="crash-card">
-            <span class="crash-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 3h2l10 18H1L11 3Zm1 3L4.4 19h15.2L12 6Zm-1 4h2v5h-2v-5Zm0 6h2v2h-2v-2Z" /></svg></span>
-            <h2>Tab stopped responding</h2>
-            <p>The page was interrupted, but the rest of your browser is still running.</p>
-            <button id="crash-reload" class="primary-btn">Reload tab</button>
+            <span class="crash-icon" aria-hidden="true">
+              <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M11 3h2l10 18H1L11 3Zm1 3L4.4 19h15.2L12 6Zm-1 4h2v5h-2v-5Zm0 6h2v2h-2v-2Z"/></svg>
+            </span>
+            <h2>Page Unresponsive</h2>
+            <p>An unexpected error occurred while loading this page.</p>
+            <button id="crash-reload" class="primary-btn">Reload Page</button>
           </div>
         </div>
       </main>
+    </div>
 
-      <footer class="status-bar" aria-label="Status">
-        <span class="status-left" id="status-left">Ready</span>
-        <span class="status-right" id="status-right">RixBrowser</span>
-      </footer>
+    <div class="palette-overlay" id="command-palette" hidden>
+      <div class="palette-backdrop" id="palette-backdrop"></div>
+      <div class="palette-card">
+        <div class="palette-input-wrap">
+          <svg class="ui-icon palette-search-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          <input id="palette-input" type="text" placeholder="Type a command or search tabs..." autocomplete="off" spellcheck="false" />
+          <kbd class="kbd-badge">Esc</kbd>
+        </div>
+        <div class="palette-results" id="palette-results"></div>
+        <footer class="palette-footer">
+          <span><kbd class="kbd-mini">↑</kbd> <kbd class="kbd-mini">↓</kbd> navigate</span>
+          <span><kbd class="kbd-mini">Enter</kbd> select</span>
+          <span><kbd class="kbd-mini">Esc</kbd> close</span>
+        </footer>
+      </div>
+    </div>
+
+    <div class="context-menu" id="tab-context-menu" hidden>
+      <button class="context-menu-item" id="ctx-reload-tab">
+        <span class="ctx-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></span>
+        <span>Reload Tab</span>
+      </button>
+      <button class="context-menu-item" id="ctx-duplicate-tab">
+        <span class="ctx-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></span>
+        <span>Duplicate</span>
+      </button>
+      <button class="context-menu-item" id="ctx-pin-tab">
+        <span class="ctx-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z"/></svg></span>
+        <span id="ctx-pin-label">Pin Tab</span>
+      </button>
+      <button class="context-menu-item" id="ctx-copy-url">
+        <span class="ctx-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></span>
+        <span>Copy URL</span>
+      </button>
+      <div class="context-menu-divider"></div>
+      <button class="context-menu-item" id="ctx-close-tab">
+        <span class="ctx-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4 6.4 5Z"/></svg></span>
+        <span>Close Tab</span>
+      </button>
+      <button class="context-menu-item" id="ctx-close-others">
+        <span class="ctx-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></span>
+        <span>Close Other Tabs</span>
+      </button>
+      <button class="context-menu-item" id="ctx-close-right">
+        <span class="ctx-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M5.59 7.41L10.18 12l-4.59 4.59L7 18l6-6-6-6zM16 6h2v12h-2z"/></svg></span>
+        <span>Close Tabs to the Right</span>
+      </button>
+      <button class="context-menu-item" id="ctx-reopen-tab">
+        <span class="ctx-icon"><svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg></span>
+        <span>Reopen Closed Tab</span>
+      </button>
+    </div>
+
+    <div class="rix-flash" id="rix-flash" hidden>
+      <span class="flash-text" id="rix-flash-text">Notification</span>
     </div>
   </div>
+
   <script src="browser.js"></script>
 </body>
 </html>

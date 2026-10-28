@@ -20,8 +20,9 @@ pub use computed::{
 pub use rule_index::{IndexedRule, RuleIndex};
 pub use specificity::Specificity;
 pub use stylesheet::{
-    default_user_agent_stylesheet, matches_container_query, matches_media_query,
-    matches_supports_query, parse_cssom_rule, parse_cssom_stylesheet, parse_declarations,
-    parse_inline_style, serialize_declarations, supports_declaration, CssomParsedRule, Declaration,
+    clear_media_query_cache, default_user_agent_stylesheet, matches_container_query,
+    matches_media_query, matches_supports_query, parse_cssom_rule, parse_cssom_stylesheet,
+    parse_declarations, parse_inline_style, preferred_color_scheme, serialize_declarations,
+    set_preferred_color_scheme, supports_declaration, ColorScheme, CssomParsedRule, Declaration,
     Rule, StyleSheet,
 };

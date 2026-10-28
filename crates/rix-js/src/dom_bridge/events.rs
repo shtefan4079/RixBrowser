@@ -152,7 +152,7 @@ fn dispatch_dom_event_object(
         );
         ev_builder.property(
             js_string!("currentTarget"),
-            target_wrapped,
+            target_wrapped.clone(),
             Attribute::WRITABLE | Attribute::ENUMERABLE,
         );
         ev_builder.property(
@@ -500,6 +500,13 @@ fn dispatch_dom_event_object(
                     false,
                     context,
                 )?;
+            }
+        }
+
+        let on_prop = format!("on{event_type}");
+        if let Ok(on_handler) = target_wrapped.get(js_string!(on_prop.as_str()), context) {
+            if let Some(func) = on_handler.as_callable() {
+                let _ = func.call(&target_wrapped.clone().into(), &[event_obj.clone().into()], context);
             }
         }
     }

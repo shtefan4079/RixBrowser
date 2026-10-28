@@ -325,6 +325,7 @@ pub struct HttpClient {
     quinn_endpoint: Option<quinn::Endpoint>,
     user_agent: String,
     accept_language: String,
+    preferred_color_scheme: String,
     max_redirects: usize,
     request_timeout: Duration,
     max_response_bytes: usize,
@@ -341,6 +342,7 @@ impl HttpClient {
         let quinn_endpoint = create_quic_endpoint(&tls);
         let profile = rix_core::BrowserProfile::system_default();
         let http_cache = Some(Arc::new(crate::cache::HttpCache::default_disk_cache()));
+        let preferred_color_scheme = "dark".to_string();
 
         Ok(Self {
             dns,
@@ -351,6 +353,7 @@ impl HttpClient {
             quinn_endpoint,
             user_agent: profile.user_agent().to_owned(),
             accept_language: profile.accept_language(),
+            preferred_color_scheme,
             max_redirects: 10,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             max_response_bytes: MAX_DECOMPRESSED_BYTES,
@@ -371,6 +374,19 @@ impl HttpClient {
 
     pub fn with_user_agent(mut self, ua: impl Into<String>) -> Self {
         self.user_agent = ua.into();
+        self
+    }
+
+    pub fn preferred_color_scheme(&self) -> &str {
+        &self.preferred_color_scheme
+    }
+
+    pub fn set_preferred_color_scheme(&mut self, scheme: &str) {
+        self.preferred_color_scheme = scheme.to_string();
+    }
+
+    pub fn with_preferred_color_scheme(mut self, scheme: impl Into<String>) -> Self {
+        self.preferred_color_scheme = scheme.into();
         self
     }
 
@@ -460,8 +476,8 @@ impl HttpClient {
 
             if negotiated == NegotiatedProtocol::H2 {
                 if let Ok((sender, conn)) = hyper::client::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
-                    .initial_stream_window_size(Some(2 * 1024 * 1024))
-                    .initial_connection_window_size(Some(4 * 1024 * 1024))
+                    .initial_stream_window_size(Some(4 * 1024 * 1024))
+                    .initial_connection_window_size(Some(8 * 1024 * 1024))
                     .handshake(io)
                     .await
                 {
@@ -1018,6 +1034,12 @@ impl HttpClient {
             )
             .header(ACCEPT_ENCODING, "gzip, deflate, br");
 
+        if !self.preferred_color_scheme.is_empty() {
+            let scheme_raw = self.preferred_color_scheme.trim().trim_matches('"');
+            let formatted_scheme = format!("\"{scheme_raw}\"");
+            builder = builder.header("sec-ch-prefers-color-scheme", formatted_scheme);
+        }
+
         if let Some(etag) = &conditional.etag {
             if !etag.is_empty() {
                 builder = builder.header("if-none-match", etag.as_str());
@@ -1500,8 +1522,8 @@ impl HttpClient {
 
             if negotiated == NegotiatedProtocol::H2 {
                 let (mut sender, conn) = hyper::client::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
-                    .initial_stream_window_size(Some(2 * 1024 * 1024))
-                    .initial_connection_window_size(Some(4 * 1024 * 1024))
+                    .initial_stream_window_size(Some(4 * 1024 * 1024))
+                    .initial_connection_window_size(Some(8 * 1024 * 1024))
                     .handshake(io)
                     .await?;
                 tokio::spawn(async move {
@@ -1585,8 +1607,8 @@ impl HttpClient {
 
             if negotiated == NegotiatedProtocol::H2 {
                 let (mut sender, conn) = hyper::client::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
-                    .initial_stream_window_size(Some(2 * 1024 * 1024))
-                    .initial_connection_window_size(Some(4 * 1024 * 1024))
+                    .initial_stream_window_size(Some(4 * 1024 * 1024))
+                    .initial_connection_window_size(Some(8 * 1024 * 1024))
                     .handshake(io)
                     .await?;
                 tokio::spawn(async move {

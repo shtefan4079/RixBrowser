@@ -122,10 +122,12 @@ pub(super) fn translate_page_display_list(
                 rect,
                 color,
                 border_radius,
+                corner_radii,
             } => DrawCommand::DrawRect {
                 rect: translated_rect(*rect, offset_x, offset_y),
                 color: *color,
                 border_radius: *border_radius,
+                corner_radii: *corner_radii,
             },
             DrawCommand::DrawLinearGradient {
                 rect,
@@ -147,11 +149,13 @@ pub(super) fn translate_page_display_list(
                 color,
                 width,
                 border_radius,
+                corner_radii,
             } => DrawCommand::DrawBorder {
                 rect: translated_rect(*rect, offset_x, offset_y),
                 color: *color,
                 width: *width,
                 border_radius: *border_radius,
+                corner_radii: *corner_radii,
             },
             DrawCommand::DrawText {
                 text,

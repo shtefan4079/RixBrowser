@@ -52,6 +52,10 @@ impl Document {
         self.root
     }
 
+    pub fn node_count(&self) -> usize {
+        self.arena.len()
+    }
+
     pub fn get_element_by_id(&self, target_id: &str) -> Option<NodeId> {
         if target_id.is_empty() {
             return None;

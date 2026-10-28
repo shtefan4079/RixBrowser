@@ -856,6 +856,12 @@ mod tests {
             }
             customElements.define('nested-element', NestedElement);
 
+            const slotEl = document.createElement('slot');
+            host.shadowRoot.appendChild(slotEl);
+            const slottedSpan = document.createElement('span');
+            host.appendChild(slottedSpan);
+            const hasAssignedSlot = slottedSpan.assignedSlot === slotEl;
+
             ({
                 dsVal,
                 hasDataAttr,
@@ -867,6 +873,7 @@ mod tests {
                 postUpgraded: postEl.upgraded === true,
                 nestedUpgraded: nestedEl.nestedUpgraded === true,
                 nestedConnected,
+                hasAssignedSlot,
             })
         "#;
         let res = runtime.evaluate(code).expect("script evaluation");
@@ -918,6 +925,10 @@ mod tests {
             .get(boa_engine::js_string!("nestedConnected"), runtime.context_mut())
             .unwrap();
         assert!(nested_conn.to_boolean());
+        let has_assigned_slot = obj
+            .get(boa_engine::js_string!("hasAssignedSlot"), runtime.context_mut())
+            .unwrap();
+        assert!(has_assigned_slot.to_boolean());
     }
 
     #[test]
@@ -1305,5 +1316,91 @@ mod tests {
         assert_eq!(by_left, 55.0);
         assert_eq!(reset_top, 0.0);
         assert_eq!(reset_left, 0.0);
+    }
+
+    #[test]
+    fn test_match_media_color_scheme_and_events() {
+        use crate::dom_bridge::{notify_match_media, register_dom_bridge, register_layout_api, DomBridgeState, LayoutHost, LayoutSnapshot};
+        use rix_dom::Document;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct DummyLayoutHost;
+        impl LayoutHost for DummyLayoutHost {
+            fn layout(&self, _document: &Document) -> Option<Rc<LayoutSnapshot>> {
+                Some(Rc::new(LayoutSnapshot::empty()))
+            }
+            fn computed_style_for_node(
+                &self,
+                _document: &Document,
+                _node: rix_dom::NodeId,
+            ) -> Option<rix_css::ComputedStyle> {
+                Some(rix_css::ComputedStyle::default())
+            }
+            fn viewport_size(&self) -> (f32, f32) {
+                (1280.0, 800.0)
+            }
+            fn scroll_position(&self) -> (f32, f32) {
+                (0.0, 0.0)
+            }
+            fn request_scroll_position(&self, _x: f32, _y: f32) {}
+        }
+
+        rix_css::set_preferred_color_scheme(rix_css::ColorScheme::Dark);
+        rix_css::clear_media_query_cache();
+
+        let mut runtime = JsRuntime::new(JsRuntimeConfig::default());
+        let doc = Rc::new(RefCell::new(Document::new()));
+        let dom_state = Rc::new(RefCell::new(DomBridgeState::with_shared_document(doc.clone())));
+        register_dom_bridge(runtime.context_mut(), dom_state).expect("dom bridge registered");
+        register_layout_api(runtime.context_mut(), Rc::new(DummyLayoutHost)).expect("layout api registered");
+
+        let code = r#"
+            globalThis.eventsReceived = [];
+            const mqlDark = window.matchMedia('(prefers-color-scheme: dark)');
+            const mqlLight = window.matchMedia('(prefers-color-scheme: light)');
+
+            const initialDark = mqlDark.matches;
+            const initialLight = mqlLight.matches;
+
+            mqlDark.addEventListener('change', (e) => {
+                globalThis.eventsReceived.push({ type: 'dark', matches: e.matches, media: e.media });
+            });
+            mqlLight.onchange = (e) => {
+                globalThis.eventsReceived.push({ type: 'light', matches: e.matches, media: e.media });
+            };
+
+            ({ initialDark, initialLight })
+        "#;
+        let res = runtime.evaluate(code).unwrap();
+        let obj = res.as_object().unwrap();
+        let init_dark = obj.get(boa_engine::js_string!("initialDark"), runtime.context_mut()).unwrap().to_boolean();
+        let init_light = obj.get(boa_engine::js_string!("initialLight"), runtime.context_mut()).unwrap().to_boolean();
+        assert!(init_dark);
+        assert!(!init_light);
+
+        rix_css::set_preferred_color_scheme(rix_css::ColorScheme::Light);
+        rix_css::clear_media_query_cache();
+        notify_match_media(runtime.context_mut()).unwrap();
+
+        let check_code = r#"
+            const currentDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const currentLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+            ({ currentDark, currentLight, events: globalThis.eventsReceived })
+        "#;
+        let res2 = runtime.evaluate(check_code).unwrap();
+        let obj2 = res2.as_object().unwrap();
+        let cur_dark = obj2.get(boa_engine::js_string!("currentDark"), runtime.context_mut()).unwrap().to_boolean();
+        let cur_light = obj2.get(boa_engine::js_string!("currentLight"), runtime.context_mut()).unwrap().to_boolean();
+        assert!(!cur_dark);
+        assert!(cur_light);
+
+        let events_val = obj2.get(boa_engine::js_string!("events"), runtime.context_mut()).unwrap();
+        let events_arr = events_val.as_object().unwrap();
+        let len = events_arr.get(boa_engine::js_string!("length"), runtime.context_mut()).unwrap().to_number(runtime.context_mut()).unwrap() as usize;
+        assert_eq!(len, 2);
+
+        rix_css::set_preferred_color_scheme(rix_css::ColorScheme::Dark);
+        rix_css::clear_media_query_cache();
     }
 }

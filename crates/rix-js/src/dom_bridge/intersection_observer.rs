@@ -33,6 +33,7 @@ pub(super) fn register(context: &mut Context) -> JsResult<()> {
             };
 
             function composedParentElement(element) {
+                if (element.assignedSlot) return element.assignedSlot;
                 const parent = element.parentNode;
                 if (parent instanceof Element) return parent;
                 if (parent && parent.nodeType === 11 && parent.host instanceof Element) return parent.host;

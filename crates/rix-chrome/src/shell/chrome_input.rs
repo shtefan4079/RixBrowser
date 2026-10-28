@@ -16,8 +16,9 @@ impl BrowserShell {
     }
 
     pub fn update_chrome_pointer(&mut self, position: Option<(f32, f32)>, pressed: bool) -> bool {
+        let is_internal = self.is_active_internal();
         let target = position.and_then(|(x, y)| {
-            if self.web_surface.contains(x, y) {
+            if !is_internal && self.web_surface.contains(x, y) {
                 return None;
             }
             self.layout_tree
@@ -31,7 +32,7 @@ impl BrowserShell {
     }
 
     pub fn cursor_at(&self, x: f32, y: f32) -> &'static str {
-        if self.web_surface.contains(x, y) {
+        if !self.is_active_internal() && self.web_surface.contains(x, y) {
             let active_id = self.active_tab_id();
             let Some(page) = self.pages.get(&active_id) else {
                 return "default";
@@ -297,6 +298,9 @@ impl BrowserShell {
     }
 
     pub(super) async fn forward_input_to_active_tab(&mut self, event: &IpcInputEvent) {
+        if self.is_active_internal() {
+            return;
+        }
         let is_in_surface = match event {
             IpcInputEvent::MouseMove { x, y }
             | IpcInputEvent::MouseDown { x, y, .. }
@@ -324,7 +328,16 @@ impl BrowserShell {
     }
 
     pub(super) async fn route_mouse_down(&mut self, x: f32, y: f32, button: u8) {
-        if self.web_surface.contains(x, y) {
+        let hit_chrome_overlay = self.layout_tree.as_ref().and_then(|lt| {
+            let node = rix_layout::hit_test::hit_test_tree(lt, x, y)?;
+            let doc = self.document.borrow();
+            let is_overlay = std::iter::once(node).chain(doc.ancestors(node)).any(|n| {
+                matches!(doc.get(n), Some(NodeData::Element(el)) if matches!(el.get_attribute("id"), Some("site-info-popup" | "tab-context-menu" | "more-menu" | "omnibox-suggestions" | "command-palette")) || matches!(el.get_attribute("class"), Some(c) if c.contains("site-info-popup") || c.contains("context-menu") || c.contains("more-menu") || c.contains("omnibox-suggestions")))
+            });
+            is_overlay.then_some(node)
+        });
+
+        if !self.is_active_internal() && self.web_surface.contains(x, y) && hit_chrome_overlay.is_none() {
             self.document.borrow_mut().set_focused(None, false);
             self.document.borrow_mut().set_text_selection(None);
             self.omnibox_focused = false;
@@ -351,32 +364,34 @@ impl BrowserShell {
             let previous_orientation = self.customization.tab_orientation();
             let previous_tabs_len = self.priv_state.borrow().tabs.len();
 
-            let chrome_hit = self.dispatch_chrome_click_at(x, y);
+            let chrome_hit = self.dispatch_chrome_click_at(x, y, button);
             if chrome_hit.is_some() {
                 self.synchronize_privileged_host(previous_active_id).await;
             }
 
-            if let Some(action) = self.click_at(x, y) {
-                let js_handled = match &action {
-                    ClickAction::ToggleTheme => self.customization.theme_mode() != previous_theme,
-                    ClickAction::ToggleTabOrientation => {
-                        self.customization.tab_orientation() != previous_orientation
+            if button == 0 {
+                if let Some(action) = self.click_at(x, y) {
+                    let js_handled = match &action {
+                        ClickAction::ToggleTheme => self.customization.theme_mode() != previous_theme,
+                        ClickAction::ToggleTabOrientation => {
+                            self.customization.tab_orientation() != previous_orientation
+                        }
+                        ClickAction::NewTab => {
+                            self.priv_state.borrow().tabs.len() > previous_tabs_len
+                        }
+                        ClickAction::CloseTab(_) => {
+                            self.priv_state.borrow().tabs.len() < previous_tabs_len
+                        }
+                        ClickAction::SwitchTab(_) => self.active_tab_id() != previous_active_id,
+                        ClickAction::FocusOmnibox => self.omnibox_focused,
+                        _ => false,
+                    };
+                    if !js_handled {
+                        self.execute_action(action).await;
                     }
-                    ClickAction::NewTab => {
-                        self.priv_state.borrow().tabs.len() > previous_tabs_len
-                    }
-                    ClickAction::CloseTab(_) => {
-                        self.priv_state.borrow().tabs.len() < previous_tabs_len
-                    }
-                    ClickAction::SwitchTab(_) => self.active_tab_id() != previous_active_id,
-                    ClickAction::FocusOmnibox => self.omnibox_focused,
-                    _ => false,
-                };
-                if !js_handled {
-                    self.execute_action(action).await;
+                } else {
+                    self.omnibox_focused = false;
                 }
-            } else {
-                self.omnibox_focused = false;
             }
             self.needs_redraw = true;
         }
@@ -397,7 +412,11 @@ impl BrowserShell {
             self.move_chrome_focus(shift);
             return;
         }
-        if chrome_owns_focus && !self.omnibox_focused && matches!(key, "Enter" | " ") {
+        let is_button = focused_node.is_some_and(|node| {
+            let doc = self.document.borrow();
+            matches!(doc.get(node), Some(NodeData::Element(el)) if &*el.name.local == "button" || el.get_attribute("role") == Some("button"))
+        });
+        if chrome_owns_focus && !self.omnibox_focused && is_button && matches!(key, "Enter" | " ") {
             if let Some(target) = focused_node {
                 let previous_active_id = self.active_tab_id();
                 let _ = dispatch_dom_event_to_js(target, "click", None, self.runtime.context_mut());
@@ -449,7 +468,8 @@ impl BrowserShell {
                 self.synchronize_privileged_host(previous_active_id).await;
             }
             match key {
-                "Enter" if chrome_allowed => {
+                "Enter" => {
+                    self.synchronize_privileged_host(previous_active_id).await;
                     if let Some(value) = self.chrome_omnibox_value() {
                         self.omnibox_text = value;
                         self.omnibox_selection =
@@ -473,14 +493,25 @@ impl BrowserShell {
                     self.omnibox_focused = false;
                     self.omnibox_selection =
                         TextSelection::collapsed(self.omnibox_text.chars().count());
+                    self.needs_redraw = true;
                 }
                 "Escape" => {
                     self.omnibox_focused = false;
                     self.omnibox_selection =
                         TextSelection::collapsed(self.omnibox_text.chars().count());
+                    self.needs_redraw = true;
                 }
                 _ => {
-                    if ctrl_l {
+                    if key == "ArrowDown" || key == "ArrowUp" {
+                        self.synchronize_privileged_host(previous_active_id).await;
+                        if let Some(val) = self.chrome_omnibox_value() {
+                            if val != self.omnibox_text {
+                                self.omnibox_text = val;
+                                self.omnibox_selection = TextSelection::collapsed(self.omnibox_text.chars().count());
+                            }
+                        }
+                        self.needs_redraw = true;
+                    } else if ctrl_l {
                         self.synchronize_privileged_host(previous_active_id).await;
                         self.omnibox_selection
                             .select_all(self.omnibox_text.chars().count());
@@ -500,6 +531,62 @@ impl BrowserShell {
                             self.synchronize_chrome_input_state(true);
                             let _ = self.recompute_layout();
                         }
+                    }
+                }
+            }
+        } else if let Some(target_input) = focused_node.filter(|&n| {
+            let doc = self.document.borrow();
+            matches!(doc.get(n), Some(NodeData::Element(el)) if matches!(el.name.local.as_str(), "input" | "textarea"))
+        }) {
+            let mut current_val = {
+                let doc = self.document.borrow();
+                doc.get(target_input)
+                    .and_then(|data| match data {
+                        NodeData::Element(el) => el.get_attribute("value").map(String::from),
+                        _ => None,
+                    })
+                    .unwrap_or_default()
+            };
+            let mut selection = TextSelection::collapsed(current_val.chars().count());
+            match key {
+                "Enter" => {
+                    self.synchronize_privileged_host(previous_active_id).await;
+                    let has_pending_go_to = self
+                        .priv_state
+                        .borrow()
+                        .navigation_history
+                        .iter()
+                        .any(|c| matches!(c, rix_js::privileged::NavigationCommand::GoTo(_)));
+                    if !has_pending_go_to && !current_val.trim().is_empty() {
+                        self.start_navigation_active_tab(&current_val);
+                    }
+                    self.synchronize_privileged_host(previous_active_id).await;
+                    self.needs_redraw = true;
+                }
+                "Escape" => {
+                    self.document.borrow_mut().set_focused(None, false);
+                    self.needs_redraw = true;
+                }
+                _ => {
+                    let result = edit_text(&mut current_val, &mut selection, &input, false, false);
+                    if result.handled {
+                        if result.changed {
+                            {
+                                let mut doc = self.document.borrow_mut();
+                                if let Some(NodeData::Element(el)) = doc.get_mut(target_input) {
+                                    el.set_attribute("value", &current_val);
+                                }
+                            }
+                            let _ = dispatch_dom_event_to_js(
+                                target_input,
+                                "input",
+                                None,
+                                self.runtime.context_mut(),
+                            );
+                            self.synchronize_privileged_host(previous_active_id).await;
+                            let _ = self.recompute_layout();
+                        }
+                        self.needs_redraw = true;
                     }
                 }
             }
@@ -574,9 +661,24 @@ impl BrowserShell {
         self.synchronize_chrome_input_state(true);
     }
 
-    pub(super) fn dispatch_chrome_click_at(&mut self, x: f32, y: f32) -> Option<rix_dom::NodeId> {
+    pub(super) fn dispatch_chrome_click_at(&mut self, x: f32, y: f32, button: u8) -> Option<rix_dom::NodeId> {
+        let is_overlay = self.layout_tree.as_ref().and_then(|lt| {
+            let node = rix_layout::hit_test::hit_test_tree(lt, x, y)?;
+            let doc = self.document.borrow();
+            let is_overlay = std::iter::once(node).chain(doc.ancestors(node)).any(|n| {
+                matches!(doc.get(n), Some(NodeData::Element(el)) if matches!(el.get_attribute("id"), Some("site-info-popup" | "tab-context-menu" | "more-menu" | "omnibox-suggestions" | "command-palette")) || matches!(el.get_attribute("class"), Some(c) if c.contains("site-info-popup") || c.contains("context-menu") || c.contains("more-menu") || c.contains("omnibox-suggestions")))
+            });
+            is_overlay.then_some(node)
+        });
+
         let target_node = if let Some(ref lt) = self.layout_tree {
-            rix_layout::hit_test::hit_test_tree(lt, x, y)
+            if is_overlay.is_some() {
+                is_overlay
+            } else if self.is_active_internal() && self.web_surface.contains(x, y) && self.internal_scroll_y > 0.0 {
+                rix_layout::hit_test::hit_test_tree_with_scroll(lt, Some(&*self.document.borrow()), x, y, 0.0, self.internal_scroll_y)
+            } else {
+                rix_layout::hit_test::hit_test_tree(lt, x, y)
+            }
         } else {
             None
         };
@@ -591,7 +693,12 @@ impl BrowserShell {
                 return None;
             }
             self.set_chrome_focus_for_node(target, Some((x, y)));
-            if let Err(e) = dispatch_dom_event_to_js(target, "click", None, self.runtime.context_mut()) {
+            let event_name = if button == 2 { "contextmenu" } else { "click" };
+            let coords = [
+                ("clientX", boa_engine::JsValue::from(x as f64)),
+                ("clientY", boa_engine::JsValue::from(y as f64)),
+            ];
+            if let Err(e) = dispatch_dom_event_to_js(target, event_name, Some(&coords), self.runtime.context_mut()) {
                 tracing::debug!("Chrome DOM event dispatch error: {e}");
             }
             return Some(target);
@@ -648,7 +755,7 @@ impl BrowserShell {
             doc.query_selector(doc.root(), "#omnibox")
         } else {
             std::iter::once(target).chain(doc.ancestors(target)).find(|&node| {
-                matches!(doc.get(node), Some(NodeData::Element(element)) if element.name.local.as_str() == "button" || element.get_attribute("tabindex") == Some("0"))
+                matches!(doc.get(node), Some(NodeData::Element(element)) if matches!(element.name.local.as_str(), "button" | "input" | "textarea") || element.get_attribute("tabindex") == Some("0"))
             })
         };
         drop(doc);
@@ -765,15 +872,13 @@ mod tests {
         ).unwrap();
         shell.recompute_layout().unwrap();
 
-        println!("Web surface bounds: {:?}", shell.web_surface.bounds);
-
         let doc = shell.document.borrow();
         let theme_node = doc.query_selector(doc.root(), "#theme-toggle").unwrap();
-        let new_tab_node = doc.query_selector(doc.root(), "#new-tab-btn").unwrap();
+        let new_tab_node = doc
+            .query_selector(doc.root(), "#sidebar-add-tab-btn")
+            .or_else(|| doc.query_selector(doc.root(), "#new-tab-btn"))
+            .unwrap();
         drop(doc);
-
-        println!("Theme node: {:?}", theme_node);
-        println!("New tab node: {:?}", new_tab_node);
 
         let lt = shell.layout_tree.as_ref().unwrap();
         let theme_box = lt.iter().find(|b| b.dom_node == Some(theme_node)).map(|b| b.dimensions.border_box());
@@ -783,8 +888,8 @@ mod tests {
             doc.query_selector(doc.root(), "#omnibox").unwrap()
         };
         let omnibox_box = lt.iter().find(|b| b.dom_node == Some(omnibox_node)).map(|b| b.dimensions.border_box());
-        println!("Theme box: {:?}", theme_box);
-        println!("New tab box: {:?}", new_tab_box);
+
+        let test_tab_id = shell.priv_state.borrow().active_tab_id;
 
         if let Some(r) = theme_box {
             let cx = r.x + r.width / 2.0;
@@ -805,46 +910,63 @@ mod tests {
         if let Some(r) = theme_box {
             let cx = r.x + r.width / 2.0;
             let cy = r.y + r.height / 2.0;
-            println!("Clicking theme at ({cx}, {cy})");
 
-            let hit = shell.layout_tree.as_ref().and_then(|lt| rix_layout::hit_test::hit_test_tree(lt, cx, cy));
-            println!("Hit node: {:?}", hit);
-            if let Some(n) = hit {
-                let doc = shell.document.borrow();
-                println!("Hit node info: {:?}", doc.get(n));
-                println!("Hit node parent: {:?}", doc.parent(n));
-            }
-
-            println!("Customization theme before: {:?}", shell.customization.theme_mode());
             let (_scene_before, _) = shell.render_frame();
-            println!("Chrome layer commands before: {}", shell.compositor.layers().get(shell.chrome_layer_id).map(|l| l.display_list.items.len()).unwrap_or(0));
 
-            shell.handle_input(IpcInputEvent::MouseDown { x: cx, y: cy, button: 0 }).await.unwrap();
-            println!("Customization theme after: {:?}", shell.customization.theme_mode());
-            assert_eq!(shell.customization.theme_mode(), crate::customization::ThemeMode::Light);
-
-            let (_scene_after, _) = shell.render_frame();
-            println!("Chrome layer commands after: {}", shell.compositor.layers().get(shell.chrome_layer_id).map(|l| l.display_list.items.len()).unwrap_or(0));
-
-            if let Some(layer) = shell.compositor.layers().get(shell.chrome_layer_id) {
-                for item in &layer.display_list.items {
-                    if let rix_render::display_list::DrawCommand::DrawRect { rect, color, .. } = &item.command {
-                        if rect.width >= 1200.0 {
-                            println!("Chrome rect: {:?} color: {:?}", rect, color);
-                        }
-                    }
+            let page_html = r#"<!DOCTYPE html><html><head><style>
+                body { background-color: rgb(100, 100, 100); }
+                @media (prefers-color-scheme: dark) { body { background-color: rgb(15, 15, 15); } }
+                @media (prefers-color-scheme: light) { body { background-color: rgb(240, 240, 240); } }
+            </style></head><body><h1>Content</h1></body></html>"#;
+            {
+                let mut host = shell.priv_state.borrow_mut();
+                if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.id == test_tab_id) {
+                    tab.url = "https://example.com".to_string();
                 }
             }
+            let mut test_page = shell.build_page_from_html("https://example.com", page_html);
+            test_page.layout_viewport = (1280.0, 700.0);
+            test_page.layout_tree = crate::page_style::compute_page_layout(
+                &test_page.document,
+                &test_page.url,
+                &test_page.external_stylesheets,
+                1280.0,
+                700.0,
+                &shell.font_database,
+            );
+            shell.pages.insert(test_tab_id, test_page);
+
+            let dark_bg = {
+                let page = shell.pages.get(&test_tab_id).unwrap();
+                let body = page.document.query_selector(page.document.root(), "body").unwrap();
+                page.layout_tree.iter().find(|b| b.dom_node == Some(body)).unwrap().style.background_color
+            };
+            assert_eq!(dark_bg, rix_css::color::CssColor::from_rgba_u8(15, 15, 15, 255));
+
+            shell.handle_input(IpcInputEvent::MouseDown { x: cx, y: cy, button: 0 }).await.unwrap();
+            assert_eq!(shell.customization.theme_mode(), crate::customization::ThemeMode::Light);
+
+            let light_bg = {
+                let page = shell.pages.get(&test_tab_id).unwrap();
+                let body = page.document.query_selector(page.document.root(), "body").unwrap();
+                page.layout_tree.iter().find(|b| b.dom_node == Some(body)).unwrap().style.background_color
+            };
+            assert_eq!(light_bg, rix_css::color::CssColor::from_rgba_u8(240, 240, 240, 255));
+
+            let (_scene_after, _) = shell.render_frame();
         }
 
         if let Some(r) = new_tab_box {
+            let r = shell
+                .layout_tree
+                .as_ref()
+                .and_then(|lt| lt.iter().find(|b| b.dom_node == Some(new_tab_node)).map(|b| b.dimensions.border_box()))
+                .unwrap_or(r);
             let cx = r.x + r.width / 2.0;
             let cy = r.y + r.height / 2.0;
-            println!("Clicking new tab at ({cx}, {cy})");
             let initial_tabs = shell.priv_state.borrow().tabs.len();
             shell.handle_input(IpcInputEvent::MouseDown { x: cx, y: cy, button: 0 }).await.unwrap();
             let new_tabs = shell.priv_state.borrow().tabs.len();
-            println!("Tabs: {initial_tabs} -> {new_tabs}");
             assert!(new_tabs > initial_tabs);
 
             let (_scene_after_tab, _) = shell.render_frame();
@@ -852,7 +974,6 @@ mod tests {
             let tabs_in_dom = doc.descendants(doc.root()).filter(|n| {
                 matches!(doc.get(*n), Some(NodeData::Element(e)) if e.get_attribute("data-tab-id").is_some())
             }).count();
-            println!("Tabs in DOM after render_frame: {tabs_in_dom}");
             assert_eq!(tabs_in_dom, 2);
         }
 
@@ -861,6 +982,14 @@ mod tests {
             let cy = r.y + r.height / 2.0;
             shell.handle_input(IpcInputEvent::MouseDown { x: cx, y: cy, button: 0 }).await.unwrap();
             assert_eq!(shell.customization.theme_mode(), crate::customization::ThemeMode::Dark);
+
+            let restored_dark_bg = {
+                let page = shell.pages.get(&test_tab_id).unwrap();
+                let body = page.document.query_selector(page.document.root(), "body").unwrap();
+                page.layout_tree.iter().find(|b| b.dom_node == Some(body)).unwrap().style.background_color
+            };
+            assert_eq!(restored_dark_bg, rix_css::color::CssColor::from_rgba_u8(15, 15, 15, 255));
+
             let (_scene, _) = shell.render_frame();
             let doc = shell.document.borrow();
             let html_node = doc.query_selector(doc.root(), "html").unwrap();
@@ -868,5 +997,275 @@ mod tests {
                 assert_eq!(el.get_attribute("data-theme"), Some("dark"));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_site_info_lock_popup() {
+        let mut shell = BrowserShell::new_with_customization(
+            1280.0,
+            800.0,
+            crate::customization::CustomizationManager::load_or_default(),
+        ).unwrap();
+        shell.recompute_layout().unwrap();
+
+        let doc = shell.document.borrow();
+        let lock_node = doc.query_selector(doc.root(), "#security-lock-btn").unwrap();
+        let popup_node = doc.query_selector(doc.root(), "#site-info-popup").unwrap();
+        drop(doc);
+
+        let lt = shell.layout_tree.as_ref().unwrap();
+        let lock_box = lt.iter().find(|b| b.dom_node == Some(lock_node)).map(|b| b.dimensions.border_box()).unwrap();
+
+        let cx = lock_box.x + lock_box.width / 2.0;
+        let cy = lock_box.y + lock_box.height / 2.0;
+
+        shell.handle_input(IpcInputEvent::MouseDown { x: cx, y: cy, button: 0 }).await.unwrap();
+
+        let doc = shell.document.borrow();
+        if let Some(NodeData::Element(el)) = doc.get(popup_node) {
+            assert!(el.get_attribute("hidden").is_none(), "site-info-popup should not be hidden after clicking lock button");
+        }
+        let sugg_node = doc.query_selector(doc.root(), "#omnibox-suggestions").unwrap();
+        if let Some(NodeData::Element(el)) = doc.get(sugg_node) {
+            assert!(el.get_attribute("hidden").is_some(), "omnibox suggestions should remain hidden");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tab_context_menu_right_click() {
+        let mut shell = BrowserShell::new_with_customization(
+            1280.0,
+            800.0,
+            crate::customization::CustomizationManager::load_or_default(),
+        ).unwrap();
+        shell.recompute_layout().unwrap();
+
+        let doc = shell.document.borrow();
+        let tab_node = doc.descendants(doc.root()).find(|n| {
+            matches!(doc.get(*n), Some(NodeData::Element(e)) if e.get_attribute("data-tab-id").is_some())
+        }).expect("should find active tab node in sidebar");
+        let ctx_menu_node = doc.query_selector(doc.root(), "#tab-context-menu").expect("context menu node exists");
+        drop(doc);
+
+        let lt = shell.layout_tree.as_ref().unwrap();
+        let tab_box = lt.iter().find(|b| b.dom_node == Some(tab_node)).map(|b| b.dimensions.border_box()).unwrap();
+        let cx = tab_box.x + tab_box.width / 2.0;
+        let cy = tab_box.y + tab_box.height / 2.0;
+
+        shell.handle_input(IpcInputEvent::MouseDown { x: cx, y: cy, button: 2 }).await.unwrap();
+
+        let doc = shell.document.borrow();
+        if let Some(NodeData::Element(el)) = doc.get(ctx_menu_node) {
+            assert!(el.get_attribute("hidden").is_none(), "Context menu should be visible after physical right-click");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_newtab_input_and_navigation() {
+        let mut shell = BrowserShell::new_with_customization(
+            1280.0,
+            800.0,
+            crate::customization::CustomizationManager::load_or_default(),
+        ).unwrap();
+        shell.recompute_layout().unwrap();
+
+        let doc = shell.document.borrow();
+        let input_by_search = doc.descendants(doc.root()).find(|n| {
+            matches!(doc.get(*n), Some(NodeData::Element(e)) if e.get_attribute("id") == Some("newtab-input"))
+        });
+        let newtab_input = input_by_search.expect("newtab input exists");
+        drop(doc);
+
+        let lt = shell.layout_tree.as_ref().unwrap();
+        let input_box = lt.iter().find(|b| b.dom_node == Some(newtab_input)).map(|b| b.dimensions.border_box()).unwrap();
+        let cx = input_box.x + input_box.width / 2.0;
+        let cy = input_box.y + input_box.height / 2.0;
+
+        shell.handle_input(IpcInputEvent::MouseDown { x: cx, y: cy, button: 0 }).await.unwrap();
+
+        shell.handle_input(IpcInputEvent::KeyDown { key: "r".to_string(), code: "KeyR".to_string() }).await.unwrap();
+        shell.handle_input(IpcInputEvent::KeyDown { key: "u".to_string(), code: "KeyU".to_string() }).await.unwrap();
+        shell.handle_input(IpcInputEvent::KeyDown { key: "s".to_string(), code: "KeyS".to_string() }).await.unwrap();
+        shell.handle_input(IpcInputEvent::KeyDown { key: "t".to_string(), code: "KeyT".to_string() }).await.unwrap();
+
+        let doc = shell.document.borrow();
+        if let Some(NodeData::Element(el)) = doc.get(newtab_input) {
+            assert_eq!(el.get_attribute("value"), Some("rust"));
+        }
+        drop(doc);
+
+        shell.handle_input(IpcInputEvent::KeyDown { key: "Enter".to_string(), code: "Enter".to_string() }).await.unwrap();
+        let active_id = shell.priv_state.borrow().active_tab_id;
+        let active_tab = shell.priv_state.borrow().tabs.iter().find(|t| t.id == active_id).cloned().unwrap();
+        assert!(active_tab.url.contains("google.com/search?q=rust") || active_tab.url.contains("rust"));
+    }
+
+    #[tokio::test]
+    async fn test_history_input_and_clear() {
+        let mut shell = BrowserShell::new_with_customization(
+            1280.0,
+            800.0,
+            crate::customization::CustomizationManager::load_or_default(),
+        ).unwrap();
+
+        shell.runtime.evaluate("navigateTo('rix://history');").unwrap();
+        shell.recompute_layout().unwrap();
+
+        let doc = shell.document.borrow();
+        let hist_input = doc.query_selector(doc.root(), "#history-search-input").expect("history search input exists");
+        let clear_btn = doc.query_selector(doc.root(), "#btn-clear-history").expect("clear history button exists");
+        drop(doc);
+
+        let lt = shell.layout_tree.as_ref().unwrap();
+        let input_box = lt.iter().find(|b| b.dom_node == Some(hist_input)).map(|b| b.dimensions.border_box()).unwrap();
+        let cx = input_box.x + input_box.width / 2.0;
+        let cy = input_box.y + input_box.height / 2.0;
+
+        shell.handle_input(IpcInputEvent::MouseDown { x: cx, y: cy, button: 0 }).await.unwrap();
+
+        shell.handle_input(IpcInputEvent::KeyDown { key: "g".to_string(), code: "KeyG".to_string() }).await.unwrap();
+        shell.handle_input(IpcInputEvent::KeyDown { key: "i".to_string(), code: "KeyI".to_string() }).await.unwrap();
+        shell.handle_input(IpcInputEvent::KeyDown { key: "t".to_string(), code: "KeyT".to_string() }).await.unwrap();
+
+        let doc = shell.document.borrow();
+        if let Some(NodeData::Element(el)) = doc.get(hist_input) {
+            assert_eq!(el.get_attribute("value"), Some("git"));
+        }
+        drop(doc);
+
+        let lt = shell.layout_tree.as_ref().unwrap();
+        let clear_box = lt.iter().find(|b| b.dom_node == Some(clear_btn)).map(|b| b.dimensions.border_box()).unwrap();
+        let bx = clear_box.x + clear_box.width / 2.0;
+        let by = clear_box.y + clear_box.height / 2.0;
+
+        shell.handle_input(IpcInputEvent::MouseDown { x: bx, y: by, button: 0 }).await.unwrap();
+
+        let doc = shell.document.borrow();
+        let has_no_entries = doc.descendants(doc.root()).any(|n| {
+            matches!(doc.get(n), Some(NodeData::Text(t)) if t.contains("No history entries found"))
+        });
+        assert!(has_no_entries, "History should be empty and display 'No history entries found'");
+    }
+
+    #[tokio::test]
+    async fn test_settings_privacy_cookies() {
+        let mut shell = BrowserShell::new_with_customization(
+            1280.0,
+            800.0,
+            crate::customization::CustomizationManager::load_or_default(),
+        ).unwrap();
+
+        if let Some(ref storage) = shell.storage {
+            let _ = storage.set_cookie(rix_storage::models::Cookie {
+                name: "session".to_string(),
+                value: "abc".to_string(),
+                domain: "github.com".to_string(),
+                path: "/".to_string(),
+                expires_at: Some(u64::MAX / 2),
+                secure: true,
+                http_only: false,
+                same_site: rix_storage::models::SameSitePolicy::Lax,
+            });
+        }
+
+        shell.priv_state.borrow_mut().cookie_domains = vec![
+            ("github.com".to_string(), 1),
+        ];
+
+        shell.runtime.evaluate("window.navigateTo('rix://settings');").unwrap();
+        shell.recompute_layout().unwrap();
+
+        let doc = shell.document.borrow();
+        let clear_cookies_btn = doc.query_selector(doc.root(), "#btn-clear-all-cookies").expect("clear all cookies button exists");
+        let has_github = doc.descendants(doc.root()).any(|n| {
+            matches!(doc.get(n), Some(NodeData::Text(t)) if t.contains("github.com"))
+        });
+        assert!(has_github, "github.com should be displayed in settings cookies list");
+        drop(doc);
+
+        let lt = shell.layout_tree.as_ref().unwrap();
+        let clear_box = lt.iter().find(|b| b.dom_node == Some(clear_cookies_btn)).map(|b| b.dimensions.border_box()).unwrap();
+        let cx = clear_box.x + clear_box.width / 2.0;
+        let cy = clear_box.y + clear_box.height / 2.0;
+
+        shell.handle_input(IpcInputEvent::MouseDown { x: cx, y: cy, button: 0 }).await.unwrap();
+
+        if let Some(ref storage) = shell.storage {
+            let cookies = storage.get_all_cookies().unwrap();
+            assert!(cookies.is_empty(), "All cookies should be deleted from storage");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_context_menu_close_others_and_copy_url() {
+        let mut shell = BrowserShell::new_with_customization(
+            1280.0,
+            800.0,
+            crate::customization::CustomizationManager::load_or_default(),
+        ).unwrap();
+
+        shell.runtime.evaluate("createTab('https://github.com', false); createTab('https://youtube.com', false);").unwrap();
+        shell.recompute_layout().unwrap();
+
+        let initial_tabs_count = shell.priv_state.borrow().tabs.len();
+        assert_eq!(initial_tabs_count, 3, "Should have 3 open tabs");
+
+        let doc = shell.document.borrow();
+        let tab1 = doc.query_selector(doc.root(), "[data-tab-id='1']").expect("tab 1 exists");
+        drop(doc);
+
+        let lt = shell.layout_tree.as_ref().unwrap();
+        let tab_box = lt.iter().find(|b| b.dom_node == Some(tab1)).map(|b| b.dimensions.border_box()).unwrap();
+        let tx = tab_box.x + tab_box.width / 2.0;
+        let ty = tab_box.y + tab_box.height / 2.0;
+
+        shell.handle_input(IpcInputEvent::MouseDown { x: tx, y: ty, button: 2 }).await.unwrap();
+        shell.recompute_layout().unwrap();
+
+        let doc = shell.document.borrow();
+        let ctx_menu = doc.query_selector(doc.root(), "#tab-context-menu").expect("context menu exists");
+        assert!(matches!(doc.get(ctx_menu), Some(NodeData::Element(el)) if el.get_attribute("hidden").is_none()));
+
+        let copy_btn = doc.query_selector(doc.root(), "#ctx-copy-url").expect("copy url button exists");
+        drop(doc);
+
+        let lt = shell.layout_tree.as_ref().unwrap();
+        let copy_box = lt.iter().find(|b| b.dom_node == Some(copy_btn)).map(|b| b.dimensions.border_box()).unwrap();
+        shell.handle_input(IpcInputEvent::MouseDown { x: copy_box.x + 5.0, y: copy_box.y + 5.0, button: 0 }).await.unwrap();
+
+        assert_eq!(crate::text_editing::get_clipboard(), "about:blank");
+
+        shell.handle_input(IpcInputEvent::MouseDown { x: tx, y: ty, button: 2 }).await.unwrap();
+        shell.recompute_layout().unwrap();
+
+        let doc = shell.document.borrow();
+        let close_others_btn = doc.query_selector(doc.root(), "#ctx-close-others").expect("close others button exists");
+        drop(doc);
+
+        let lt = shell.layout_tree.as_ref().unwrap();
+        let close_box = lt.iter().find(|b| b.dom_node == Some(close_others_btn)).map(|b| b.dimensions.border_box()).unwrap();
+        shell.handle_input(IpcInputEvent::MouseDown { x: close_box.x + 5.0, y: close_box.y + 5.0, button: 0 }).await.unwrap();
+
+        let remaining_tabs = shell.priv_state.borrow().tabs.len();
+        assert_eq!(remaining_tabs, 1, "Only 1 tab should remain after Close Other Tabs");
+    }
+
+    #[tokio::test]
+    async fn test_internal_page_scrolling() {
+        let mut shell = BrowserShell::new_with_customization(
+            1280.0,
+            800.0,
+            crate::customization::CustomizationManager::load_or_default(),
+        ).unwrap();
+
+        shell.runtime.evaluate("window.navigateTo('rix://settings');").unwrap();
+        shell.recompute_layout().unwrap();
+
+        assert_eq!(shell.internal_scroll_y, 0.0);
+
+        shell.scroll_active_tab(120.0);
+        let _ = shell.render_frame();
+
+        assert_eq!(shell.internal_scroll_y, 120.0);
     }
 }

@@ -34,7 +34,7 @@ fn default_orientation() -> AppTabOrientation {
 }
 
 fn default_homepage() -> String {
-    "https://www.youtube.com/".to_string()
+    "rix://newtab".to_string()
 }
 
 fn default_search_engine_template() -> String {

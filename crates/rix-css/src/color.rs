@@ -576,8 +576,12 @@ impl CssColor {
             .trim_end_matches(')')
             .trim()
             .to_string();
-        let (light_str, _) = split_top_level_comma(&inner)?;
-        Self::parse(light_str.trim())
+        let (light_str, dark_str) = split_top_level_comma(&inner)?;
+        if crate::preferred_color_scheme() == crate::ColorScheme::Dark {
+            Self::parse(dark_str.trim()).or_else(|| Self::parse(light_str.trim()))
+        } else {
+            Self::parse(light_str.trim()).or_else(|| Self::parse(dark_str.trim()))
+        }
     }
 
     #[allow(clippy::too_many_lines)]

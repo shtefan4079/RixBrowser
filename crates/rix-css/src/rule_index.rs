@@ -453,6 +453,16 @@ mod tests {
         assert!(matches_supports_query("(display: flex)"));
         assert!(matches_supports_query("(display: flex)")); 
         assert!(!matches_supports_query("(unknown-unsupported-property-xyz: 123)"));
+
+        crate::set_preferred_color_scheme(crate::ColorScheme::Dark);
+        assert!(matches_media_query("(prefers-color-scheme: dark)", 1280.0, 800.0));
+        assert!(!matches_media_query("(prefers-color-scheme: light)", 1280.0, 800.0));
+
+        crate::set_preferred_color_scheme(crate::ColorScheme::Light);
+        assert!(!matches_media_query("(prefers-color-scheme: dark)", 1280.0, 800.0));
+        assert!(matches_media_query("(prefers-color-scheme: light)", 1280.0, 800.0));
+
+        crate::set_preferred_color_scheme(crate::ColorScheme::Dark);
     }
 
     #[test]

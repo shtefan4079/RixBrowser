@@ -23,15 +23,24 @@ pub enum NavigationCommand {
     Reload,
 }
 
+#[derive(Debug, Clone)]
+pub enum CookieCommand {
+    DeleteForDomain(String),
+    ClearAll,
+}
+
 pub struct PrivilegedHostState {
     pub current_url: Option<RixUrl>,
     pub tabs: Vec<TabDescriptor>,
     pub next_tab_id: u32,
     pub active_tab_id: u32,
     pub navigation_history: Vec<NavigationCommand>,
+    pub cookie_commands: Vec<CookieCommand>,
+    pub cookie_domains: Vec<(String, usize)>,
     pub posted_messages: Vec<String>,
     pub requested_theme: Option<String>,
     pub requested_tab_orientation: Option<String>,
+    pub clipboard_write: Option<String>,
 }
 
 impl PrivilegedHostState {
@@ -39,7 +48,7 @@ impl PrivilegedHostState {
         let initial_tab = TabDescriptor {
             id: 1,
             title: "New Tab".to_string(),
-            url: "about:blank".to_string(),
+            url: "rix://newtab".to_string(),
             is_active: true,
         };
         Self {
@@ -48,9 +57,12 @@ impl PrivilegedHostState {
             next_tab_id: 2,
             active_tab_id: 1,
             navigation_history: Vec::new(),
+            cookie_commands: Vec::new(),
+            cookie_domains: Vec::new(),
             posted_messages: Vec::new(),
             requested_theme: None,
             requested_tab_orientation: None,
+            clipboard_write: None,
         }
     }
 
@@ -180,7 +192,34 @@ pub fn register_privileged_api_if_eligible(
     );
     let chrome_obj = chrome_builder.build();
 
+    let mut cookies_builder = ObjectInitializer::new(context);
+    cookies_builder.function(
+        NativeFunction::from_fn_ptr(rix_cookies_list),
+        js_string!("list"),
+        0,
+    );
+    cookies_builder.function(
+        NativeFunction::from_fn_ptr(rix_cookies_delete_domain),
+        js_string!("deleteForDomain"),
+        1,
+    );
+    cookies_builder.function(
+        NativeFunction::from_fn_ptr(rix_cookies_clear_all),
+        js_string!("clearAll"),
+        0,
+    );
+    let cookies_obj = cookies_builder.build();
+
+    let mut clipboard_builder = ObjectInitializer::new(context);
+    clipboard_builder.function(
+        NativeFunction::from_fn_ptr(rix_clipboard_write_text),
+        js_string!("writeText"),
+        1,
+    );
+    let clipboard_obj = clipboard_builder.build();
+
     let mut rix_builder = ObjectInitializer::new(context);
+
     rix_builder.property(
         js_string!("tabs"),
         tabs_obj,
@@ -194,6 +233,16 @@ pub fn register_privileged_api_if_eligible(
     rix_builder.property(
         js_string!("chrome"),
         chrome_obj,
+        Attribute::READONLY | Attribute::ENUMERABLE,
+    );
+    rix_builder.property(
+        js_string!("cookies"),
+        cookies_obj,
+        Attribute::READONLY | Attribute::ENUMERABLE,
+    );
+    rix_builder.property(
+        js_string!("clipboard"),
+        clipboard_obj,
         Attribute::READONLY | Attribute::ENUMERABLE,
     );
     rix_builder.function(
@@ -216,6 +265,19 @@ pub fn register_privileged_api_if_eligible(
                 globalThis.window = globalThis;
             }
             window.rix = rixObj;
+            if (typeof navigator === "undefined") {
+                globalThis.navigator = {};
+            }
+            if (!navigator.clipboard) {
+                navigator.clipboard = {
+                    writeText: function(text) {
+                        if (rixObj && rixObj.clipboard && typeof rixObj.clipboard.writeText === "function") {
+                            rixObj.clipboard.writeText(text);
+                        }
+                        return Promise.resolve();
+                    }
+                };
+            }
         })
     "#;
     let _ = context
@@ -441,6 +503,92 @@ fn rix_post_message(_this: &JsValue, args: &[JsValue], context: &mut Context) ->
         .cloned();
     if let Some(state) = state {
         state.borrow_mut().posted_messages.push(msg);
+    }
+    Ok(JsValue::undefined())
+}
+
+fn rix_cookies_list(
+    _this: &JsValue,
+    _args: &[JsValue],
+    context: &mut Context,
+) -> JsResult<JsValue> {
+    let state = context
+        .get_data::<Rc<RefCell<PrivilegedHostState>>>()
+        .cloned();
+    let mut elements = Vec::new();
+    if let Some(state) = state {
+        let borrowed = state.borrow();
+        for (domain, count) in &borrowed.cookie_domains {
+            let mut obj = ObjectInitializer::new(context);
+            obj.property(
+                js_string!("domain"),
+                js_string!(domain.clone()),
+                Attribute::READONLY | Attribute::ENUMERABLE,
+            );
+            obj.property(
+                js_string!("count"),
+                JsValue::new(*count as i32),
+                Attribute::READONLY | Attribute::ENUMERABLE,
+            );
+            elements.push(obj.build().into());
+        }
+    }
+    let array = boa_engine::object::builtins::JsArray::from_iter(elements, context);
+    Ok(array.into())
+}
+
+fn rix_cookies_delete_domain(
+    _this: &JsValue,
+    args: &[JsValue],
+    context: &mut Context,
+) -> JsResult<JsValue> {
+    let domain = args
+        .get_or_undefined(0)
+        .to_string(context)?
+        .to_std_string_escaped();
+    let state = context
+        .get_data::<Rc<RefCell<PrivilegedHostState>>>()
+        .cloned();
+    if let Some(state) = state {
+        state
+            .borrow_mut()
+            .cookie_commands
+            .push(CookieCommand::DeleteForDomain(domain));
+    }
+    Ok(JsValue::undefined())
+}
+
+fn rix_cookies_clear_all(
+    _this: &JsValue,
+    _args: &[JsValue],
+    context: &mut Context,
+) -> JsResult<JsValue> {
+    let state = context
+        .get_data::<Rc<RefCell<PrivilegedHostState>>>()
+        .cloned();
+    if let Some(state) = state {
+        state
+            .borrow_mut()
+            .cookie_commands
+            .push(CookieCommand::ClearAll);
+    }
+    Ok(JsValue::undefined())
+}
+
+fn rix_clipboard_write_text(
+    _this: &JsValue,
+    args: &[JsValue],
+    context: &mut Context,
+) -> JsResult<JsValue> {
+    let text = args
+        .get_or_undefined(0)
+        .to_string(context)?
+        .to_std_string_escaped();
+    let state = context
+        .get_data::<Rc<RefCell<PrivilegedHostState>>>()
+        .cloned();
+    if let Some(state) = state {
+        state.borrow_mut().clipboard_write = Some(text);
     }
     Ok(JsValue::undefined())
 }

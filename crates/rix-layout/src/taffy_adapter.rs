@@ -350,6 +350,9 @@ fn normalize_white_space(text: &str, white_space: &str) -> String {
             pending_space = false;
         }
     }
+    if out.is_empty() && text.chars().any(|ch| matches!(ch, ' ' | '\t' | '\n' | '\r' | '\x0C')) {
+        return " ".to_string();
+    }
     out
 }
 
@@ -492,8 +495,35 @@ impl TaffyLayoutEngine {
         }
         self.taffy.clear();
         let mut inline_paragraphs = InlineParagraphCache::default();
-        let mut box_to_taffy = HashMap::new();
-        let taffy_root = self.build_taffy_tree_recursive(tree, root_id, &mut box_to_taffy)?;
+        let mut box_to_taffy = HashMap::with_capacity(tree.len());
+        let mut fixed_nodes = Vec::new();
+        let taffy_html_root = self.build_taffy_tree_recursive(
+            tree,
+            root_id,
+            &mut box_to_taffy,
+            false,
+            &mut fixed_nodes,
+        )?;
+        let taffy_root = if fixed_nodes.is_empty() {
+            taffy_html_root
+        } else {
+            let mut viewport_children = Vec::with_capacity(1 + fixed_nodes.len());
+            viewport_children.push(taffy_html_root);
+            viewport_children.extend(fixed_nodes);
+            self.taffy
+                .new_with_children(
+                    Style {
+                        display: taffy::style::Display::Block,
+                        size: Size {
+                            width: Dimension::length(viewport_width),
+                            height: Dimension::length(viewport_height),
+                        },
+                        ..Default::default()
+                    },
+                    &viewport_children,
+                )
+                .map_err(|e| format!("Failed to create Taffy viewport: {e:?}"))?
+        };
         SHARED_TEXT_CACHE.with(|cache_cell| {
             let mut text_cache_guard = cache_cell.borrow_mut();
             text_cache_guard.prepare_fonts(font_db);
@@ -601,6 +631,7 @@ impl TaffyLayoutEngine {
             0.0,
             viewport_width,
             viewport_width,
+            viewport_height,
             &box_to_taffy,
         )?;
         let text_ids: Vec<_> = tree
@@ -693,6 +724,8 @@ impl TaffyLayoutEngine {
         tree: &LayoutTree,
         box_id: LayoutBoxId,
         map: &mut HashMap<LayoutBoxId, NodeId>,
+        is_fixed_subtree: bool,
+        fixed_nodes: &mut Vec<NodeId>,
     ) -> Result<NodeId, String> {
         let box_data = match tree.get(box_id) {
             Some(b) => b,
@@ -707,8 +740,28 @@ impl TaffyLayoutEngine {
             let mut sorted_children = box_data.children.clone();
             sorted_children.sort_by_key(|&cid| tree.get(cid).map(|b| b.style.order).unwrap_or(0));
             for child_id in sorted_children {
-                let child_node = self.build_taffy_tree_recursive(tree, child_id, map)?;
-                taffy_children.push(child_node);
+                let child_is_fixed = tree
+                    .get(child_id)
+                    .is_some_and(|b| b.style.position == "fixed");
+                if child_is_fixed && !is_fixed_subtree {
+                    let child_node = self.build_taffy_tree_recursive(
+                        tree,
+                        child_id,
+                        map,
+                        true,
+                        fixed_nodes,
+                    )?;
+                    fixed_nodes.push(child_node);
+                } else {
+                    let child_node = self.build_taffy_tree_recursive(
+                        tree,
+                        child_id,
+                        map,
+                        is_fixed_subtree,
+                        fixed_nodes,
+                    )?;
+                    taffy_children.push(child_node);
+                }
             }
         }
 
@@ -990,6 +1043,7 @@ impl TaffyLayoutEngine {
         parent_y: f32,
         containing_width: f32,
         viewport_width: f32,
+        viewport_height: f32,
         map: &HashMap<LayoutBoxId, NodeId>,
     ) -> Result<(), String> {
         let taffy_node = *map
@@ -1001,10 +1055,29 @@ impl TaffyLayoutEngine {
             .layout(taffy_node)
             .map_err(|e| format!("Failed to read Taffy layout: {e:?}"))?;
 
-        let abs_x = parent_x + layout.location.x;
-        let abs_y = parent_y + layout.location.y;
         let width = layout.size.width;
         let height = layout.size.height;
+        let mut abs_x = parent_x + layout.location.x;
+        let mut abs_y = parent_y + layout.location.y;
+
+        if let Some(box_data) = tree.get(box_id) {
+            if box_data.style.position == "fixed" {
+                if (box_data.style.left == Some(0.0) && box_data.style.right == Some(0.0)
+                    || box_data.style.margin_left_auto && box_data.style.margin_right_auto)
+                    && width > 0.0
+                    && width < viewport_width
+                {
+                    abs_x = (viewport_width - width) / 2.0;
+                }
+                if (box_data.style.top == Some(0.0) && box_data.style.bottom == Some(0.0)
+                    || box_data.style.margin_top_auto && box_data.style.margin_bottom_auto)
+                    && height > 0.0
+                    && height < viewport_height
+                {
+                    abs_y = (viewport_height - height) / 2.0;
+                }
+            }
+        }
 
         let (children, content_w) = {
             let box_mut = tree
@@ -1068,6 +1141,7 @@ impl TaffyLayoutEngine {
                 origin_y,
                 child_containing_width,
                 viewport_width,
+                viewport_height,
                 map,
             )?;
         }
@@ -1157,22 +1231,26 @@ pub(crate) fn compute_atomic_sizes(
             continue;
         };
         let box_data = tree.get(*id)?;
-        let size = if box_data.is_replaced {
-            measure_replaced_element(
-                box_data,
-                Size {
-                    width: None,
-                    height: None,
-                },
-                parent_size,
+        let (size, baseline) = if box_data.is_replaced {
+            (
+                measure_replaced_element(
+                    box_data,
+                    Size {
+                        width: None,
+                        height: None,
+                    },
+                    parent_size,
+                ),
+                None,
             )
         } else {
-            layout_isolated(tree, *id, width, containing_height, text_cache, font_db, depth + 1)
-                .map(|layout| layout.size)
-                .unwrap_or(Size {
-                    width: 0.0,
-                    height: 0.0,
-                })
+            let isolated = layout_isolated(tree, *id, width, containing_height, text_cache, font_db, depth + 1);
+            let size = isolated.as_ref().map(|layout| layout.size).unwrap_or(Size {
+                width: 0.0,
+                height: 0.0,
+            });
+            let baseline = isolated.and_then(|layout| layout.baseline);
+            (size, baseline)
         };
         atomic_sizes.insert(
             *id,
@@ -1185,6 +1263,7 @@ pub(crate) fn compute_atomic_sizes(
                     box_data.style.margin_bottom,
                     box_data.style.margin_left,
                 ),
+                baseline,
             },
         );
     }
@@ -1448,5 +1527,199 @@ mod tests {
         let p2 = cache.paragraph(&box_data, Some(200.0), &db, false);
         assert_eq!(cache.entries.len(), 1);
         assert!(Arc::ptr_eq(&p1, &p2));
+    }
+
+    #[test]
+    fn test_fixed_element_viewport_centering() {
+        let mut engine = TaffyLayoutEngine::new();
+        let mut tree = LayoutTree::new();
+
+        let root_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: None,
+            children: vec![LayoutBoxId(1)],
+        });
+
+        let dialog_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(1),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                position: "fixed".to_string(),
+                width: Some(400.0),
+                height: Some(200.0),
+                top: Some(0.0),
+                bottom: Some(0.0),
+                left: Some(0.0),
+                right: Some(0.0),
+                margin_top_auto: true,
+                margin_bottom_auto: true,
+                margin_left_auto: true,
+                margin_right_auto: true,
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(root_id),
+            children: Vec::new(),
+        });
+        tree.root = Some(root_id);
+
+        engine.compute_layout(&mut tree, 1000.0, 600.0).unwrap();
+
+        let dialog = tree.get(dialog_id).unwrap();
+        assert_eq!(dialog.dimensions.content.x, 300.0);
+        assert_eq!(dialog.dimensions.content.y, 200.0);
+        assert_eq!(dialog.dimensions.content.width, 400.0);
+        assert_eq!(dialog.dimensions.content.height, 200.0);
+    }
+
+    #[test]
+    fn test_dialog_flex_overflow_scroll_height() {
+        let mut engine = TaffyLayoutEngine::new();
+        let mut tree = LayoutTree::new();
+
+        let root_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: None,
+            children: vec![LayoutBoxId(1)],
+        });
+
+        let dialog_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(1),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Flex,
+                flex_direction: "column".to_string(),
+                position: "fixed".to_string(),
+                width: Some(700.0),
+                height: None,
+                top: Some(0.0),
+                bottom: Some(0.0),
+                margin_top: 24.0,
+                margin_bottom: 24.0,
+                margin_left: 40.0,
+                margin_right: 40.0,
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(root_id),
+            children: vec![LayoutBoxId(2), LayoutBoxId(3)],
+        });
+
+        let topbar_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Flex,
+                height: Some(45.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(dialog_id),
+            children: Vec::new(),
+        });
+
+        let body_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                height: Some(600.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: None,
+            children: Vec::new(),
+        });
+
+        let content_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                overflow_y: "auto".to_string(),
+                height: None,
+                flex_shrink: 1.0,
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(dialog_id),
+            children: vec![body_id],
+        });
+
+        tree.get_mut(body_id).unwrap().parent = Some(content_id);
+        tree.get_mut(dialog_id).unwrap().children = vec![topbar_id, content_id];
+
+        tree.root = Some(root_id);
+
+        engine.compute_layout(&mut tree, 1024.0, 385.0).unwrap();
+
+        let dialog = tree.get(dialog_id).unwrap();
+        let content = tree.get(content_id).unwrap();
+        assert_eq!(dialog.dimensions.content.width, 700.0);
+        assert_eq!(dialog.dimensions.content.height, 337.0);
+        assert_eq!(content.dimensions.content.width, 700.0);
+        assert!(content.dimensions.content.height > 300.0);
     }
 }

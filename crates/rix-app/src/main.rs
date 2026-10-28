@@ -445,16 +445,24 @@ impl ApplicationHandler<AppEvent> for RixBrowserApp {
             }
             WindowEvent::MouseInput {
                 state: ElementState::Released,
-                button: MouseButton::Left,
+                button,
                 ..
             } => {
-                self.mouse_pressed = false;
+                let btn_num = match button {
+                    MouseButton::Left => 0,
+                    MouseButton::Middle => 1,
+                    MouseButton::Right => 2,
+                    _ => 0,
+                };
+                if btn_num == 0 {
+                    self.mouse_pressed = false;
+                }
                 if let Some(ref mut shell) = self.shell {
                     shell.update_chrome_pointer(Some(self.mouse_pos), false);
                     let _ = pollster::block_on(shell.handle_input(IpcInputEvent::MouseUp {
                         x: self.mouse_pos.0,
                         y: self.mouse_pos.1,
-                        button: 0,
+                        button: btn_num,
                     }));
                 }
                 if let Some(ref win) = self.window {
@@ -466,17 +474,25 @@ impl ApplicationHandler<AppEvent> for RixBrowserApp {
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
-                button: MouseButton::Left,
+                button,
                 ..
             } => {
-                self.mouse_pressed = true;
-                tracing::info!(x = self.mouse_pos.0, y = self.mouse_pos.1, "Mouse press");
+                let btn_num = match button {
+                    MouseButton::Left => 0,
+                    MouseButton::Middle => 1,
+                    MouseButton::Right => 2,
+                    _ => 0,
+                };
+                if btn_num == 0 {
+                    self.mouse_pressed = true;
+                }
+                tracing::info!(x = self.mouse_pos.0, y = self.mouse_pos.1, button = btn_num, "Mouse press");
                 if let Some(ref mut shell) = self.shell {
                     shell.update_chrome_pointer(Some(self.mouse_pos), true);
                     let _ = pollster::block_on(shell.handle_input(IpcInputEvent::MouseDown {
                         x: self.mouse_pos.0,
                         y: self.mouse_pos.1,
-                        button: 0,
+                        button: btn_num,
                     }));
                     if let Some(ref win) = self.window {
                         win.request_redraw();

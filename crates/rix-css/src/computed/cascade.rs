@@ -207,6 +207,11 @@ fn compute_style_from_matched(
             white_space: parent.white_space.clone(),
             cursor: parent.cursor.clone(),
             variables: parent.variables.clone(),
+            fill: parent.fill,
+            fill_is_current_color: parent.fill_is_current_color,
+            stroke: parent.stroke,
+            stroke_is_current_color: parent.stroke_is_current_color,
+            stroke_width: parent.stroke_width,
             ..ComputedStyle::default()
         }
     } else {
@@ -395,6 +400,13 @@ fn compute_style_from_matched(
         style.min_height = Some(0.0);
     }
 
+    if style.fill_is_current_color {
+        style.fill = Some(style.color);
+    }
+    if style.stroke_is_current_color {
+        style.stroke = Some(style.color);
+    }
+
     style
 }
 
@@ -483,14 +495,6 @@ pub fn compute_tree_styles_with_scoped_author(
     container: Option<ContainerQueryContext<'_>>,
     out: &mut HashMap<NodeId, ComputedStyle>,
 ) {
-    let initial_scope_root = doc.shadow_root_containing(node);
-    let parent_has_sr = doc
-        .parent(node)
-        .and_then(|p| match doc.get(p) {
-            Some(NodeData::Element(e)) => Some(e.shadow_root.is_some()),
-            _ => None,
-        })
-        .unwrap_or(false);
     compute_tree_styles_inner(
         doc,
         node,
@@ -498,8 +502,6 @@ pub fn compute_tree_styles_with_scoped_author(
         ua_index,
         author_index,
         shadow_author_indexes,
-        initial_scope_root,
-        parent_has_sr,
         ctx,
         container,
         out,
@@ -514,8 +516,6 @@ fn compute_tree_styles_inner(
     ua_index: &RuleIndex,
     author_index: &RuleIndex,
     shadow_author_indexes: &HashMap<NodeId, RuleIndex>,
-    current_scope_root: Option<NodeId>,
-    parent_has_shadow_root: bool,
     ctx: &LayoutContext,
     container: Option<ContainerQueryContext<'_>>,
     out: &mut HashMap<NodeId, ComputedStyle>,
@@ -539,6 +539,11 @@ fn compute_tree_styles_inner(
                 white_space: parent.white_space.clone(),
                 cursor: parent.cursor.clone(),
                 variables: parent.variables.clone(),
+                fill: parent.fill,
+                fill_is_current_color: parent.fill_is_current_color,
+                stroke: parent.stroke,
+                stroke_is_current_color: parent.stroke_is_current_color,
+                stroke_width: parent.stroke_width,
                 ..ComputedStyle::default()
             }
         } else {
@@ -548,10 +553,10 @@ fn compute_tree_styles_inner(
         return;
     }
 
-    let (node_scope_root, element_shadow_root) = match doc.get(node) {
-        Some(NodeData::ShadowRoot { .. }) => (Some(node), None),
-        Some(NodeData::Element(element)) => (current_scope_root, element.shadow_root),
-        _ => (current_scope_root, None),
+    let node_scope_root = doc.shadow_root_containing(node);
+    let element_shadow_root = match doc.get(node) {
+        Some(NodeData::Element(element)) => element.shadow_root,
+        _ => None,
     };
 
     let scope_author_index = node_scope_root
@@ -561,27 +566,23 @@ fn compute_tree_styles_inner(
     let host_author_index = element_shadow_root
         .and_then(|root| shadow_author_indexes.get(&root));
 
-    let slotted_rules = if parent_has_shadow_root {
-        if let Some(slot) = doc.assigned_slot_for(node) {
-            if let Some(slot_root) = doc.shadow_root_containing(slot) {
-                if let Some(shadow_index) = shadow_author_indexes.get(&slot_root) {
-                    let (cw, ch, cname) = match container {
-                        Some(c) => (c.width, c.height, c.name),
-                        None => (ctx.viewport_width, ctx.viewport_height, None),
-                    };
-                    shadow_index.match_slotted_element_with_container(
-                        doc,
-                        node,
-                        slot,
-                        ctx.viewport_width,
-                        ctx.viewport_height,
-                        cw,
-                        ch,
-                        cname,
-                    )
-                } else {
-                    Vec::new()
-                }
+    let slotted_rules = if let Some(slot) = doc.assigned_slot_for(node) {
+        if let Some(slot_root) = doc.shadow_root_containing(slot) {
+            if let Some(shadow_index) = shadow_author_indexes.get(&slot_root) {
+                let (cw, ch, cname) = match container {
+                    Some(c) => (c.width, c.height, c.name),
+                    None => (ctx.viewport_width, ctx.viewport_height, None),
+                };
+                shadow_index.match_slotted_element_with_container(
+                    doc,
+                    node,
+                    slot,
+                    ctx.viewport_width,
+                    ctx.viewport_height,
+                    cw,
+                    ch,
+                    cname,
+                )
             } else {
                 Vec::new()
             }
@@ -615,7 +616,7 @@ fn compute_tree_styles_inner(
         *ctx
     };
 
-    let has_sr = element_shadow_root.is_some();
+    let _ = element_shadow_root;
     doc.for_each_composed_child(node, |child| {
         compute_tree_styles_inner(
             doc,
@@ -624,8 +625,6 @@ fn compute_tree_styles_inner(
             ua_index,
             author_index,
             shadow_author_indexes,
-            node_scope_root,
-            has_sr,
             &child_ctx,
             container,
             out,
@@ -775,6 +774,9 @@ pub(super) fn is_inherited_property(name: &str) -> bool {
             | "letter-spacing"
             | "word-spacing"
             | "cursor"
+            | "fill"
+            | "stroke"
+            | "stroke-width"
     )
 }
 
@@ -800,5 +802,35 @@ mod tests {
         let with_fallback = "var(--missing, 24px)";
         let res3 = resolve_var(with_fallback, &vars);
         assert_eq!(&*res3, "24px");
+    }
+
+    #[test]
+    fn test_svg_fill_stroke_inheritance_and_current_color() {
+        let mut parent = ComputedStyle::default();
+        parent.color = CssColor::from_rgba_u8(255, 255, 255, 255);
+        parent.fill = Some(parent.color);
+        parent.fill_is_current_color = true;
+
+        let doc = Document::new();
+        let root = doc.root();
+        let matched = MatchedRules {
+            ua: Vec::new(),
+            host: Vec::new(),
+            slotted: &[],
+            author: Vec::new(),
+        };
+
+        let style = compute_style_from_matched(
+            &doc,
+            root,
+            Some(&parent),
+            &matched,
+            None,
+            &LayoutContext::default(),
+            None,
+        );
+        assert_eq!(style.color, CssColor::from_rgba_u8(255, 255, 255, 255));
+        assert!(style.fill_is_current_color);
+        assert_eq!(style.fill, Some(CssColor::from_rgba_u8(255, 255, 255, 255)));
     }
 }

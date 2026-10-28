@@ -553,10 +553,10 @@ pub(super) fn register_get_computed_style(context: &mut Context) -> JsResult<()>
                                 ? element.__styleItem(index)
                                 : properties[index];
                         }
-                        const property = name === 'cssFloat' ? 'float' : aliases.get(name) || (known.has(name) ? name : null);
+                        const property = name === 'cssFloat' ? 'float' : aliases.get(name) || (known.has(name) ? name : (name.startsWith('--') ? name : dashed(name)));
                         if (inline && name.startsWith('--')) return element.__styleGet(name);
                         if (inline && property) return element.__styleGet(property);
-                        if (property) return empty ? '' : read(element, property);
+                        if (property && known.has(property)) return empty ? '' : read(element, property);
                         return Reflect.get(target, name, receiver);
                     },
                     set(target, name, value, receiver) {
@@ -564,7 +564,7 @@ pub(super) fn register_get_computed_style(context: &mut Context) -> JsResult<()>
                         if (typeof name !== 'string') return Reflect.set(target, name, value, receiver);
                         if (Reflect.has(target, name)) return Reflect.set(target, name, value, receiver);
                         if (/^(0|[1-9]\d*)$/.test(name)) return false;
-                        const property = name === 'cssFloat' ? 'float' : aliases.get(name) || (known.has(name) ? name : null);
+                        const property = name === 'cssFloat' ? 'float' : aliases.get(name) || (known.has(name) ? name : (name.startsWith('--') ? name : dashed(name)));
                         if (name.startsWith('--') || property) {
                             element.__styleSet(property || name, String(value), '');
                             return true;

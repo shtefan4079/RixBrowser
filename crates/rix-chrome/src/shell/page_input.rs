@@ -612,6 +612,61 @@ impl BrowserShell {
             }
         }
 
+        let clipboard_text = self.priv_state.borrow_mut().clipboard_write.take();
+        if let Some(text) = clipboard_text {
+            crate::text_editing::set_clipboard(&text);
+        }
+
+        let cookie_cmds = {
+            let mut state = self.priv_state.borrow_mut();
+            std::mem::take(&mut state.cookie_commands)
+        };
+        let mut should_reload = false;
+        let active_tab_url = self
+            .pages
+            .get(&self.active_tab_id())
+            .map(|p| p.url.clone())
+            .unwrap_or_default();
+        let is_internal = self.is_active_internal();
+
+        if let Some(ref storage) = self.storage {
+            for cmd in cookie_cmds {
+                match cmd {
+                    rix_js::privileged::CookieCommand::DeleteForDomain(domain) => {
+                        let _ = storage.delete_cookies_for_domain(&domain);
+                        let _ = storage.clear_local_storage(&format!("https://{domain}"));
+                        let _ = storage.clear_local_storage(&format!("http://{domain}"));
+                        if domain.contains("youtube.com") {
+                            let _ = storage.delete_cookies_for_domain("google.com");
+                            let _ = storage.clear_local_storage("https://www.google.com");
+                            let _ = storage.clear_local_storage("https://consent.youtube.com");
+                        }
+                        if active_tab_url.contains(&domain) {
+                            should_reload = true;
+                        }
+                    }
+                    rix_js::privileged::CookieCommand::ClearAll => {
+                        let _ = storage.clear_cookies();
+                        if !is_internal {
+                            should_reload = true;
+                        }
+                    }
+                }
+            }
+            if let Ok(cookies) = storage.get_all_cookies() {
+                let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+                for c in cookies {
+                    let domain = c.domain.trim_start_matches('.').to_string();
+                    *counts.entry(domain).or_insert(0) += 1;
+                }
+                self.priv_state.borrow_mut().cookie_domains = counts.into_iter().collect();
+            }
+        }
+
+        if should_reload {
+            self.start_reload_active_tab();
+        }
+
         let descriptors = self.priv_state.borrow().tabs.clone();
         let descriptor_ids: std::collections::HashSet<u32> =
             descriptors.iter().map(|tab| tab.id).collect();

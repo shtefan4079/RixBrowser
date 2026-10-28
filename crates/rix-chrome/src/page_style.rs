@@ -120,7 +120,7 @@ pub fn compute_page_styles_and_layout_with_environment(
 ) -> (LayoutTree, HashMap<NodeId, ComputedStyle>) {
     let trace = std::env::var_os("RIX_WORKER_TRACE").is_some();
     let phase_started = std::time::Instant::now();
-    let mut computed = HashMap::with_capacity(1024);
+    let mut computed = HashMap::with_capacity(document.node_count().max(1024));
     compute_tree_styles_with_scoped_author(
         document,
         document.root(),
@@ -227,6 +227,7 @@ fn collect_style_sources<'a>(
     let mut doc_hasher = std::collections::hash_map::DefaultHasher::new();
     viewport_width.to_bits().hash(&mut hasher);
     viewport_height.to_bits().hash(&mut hasher);
+    (rix_css::preferred_color_scheme() as u8).hash(&mut hasher);
 
     let base_url = document_base_url(document, document_url);
     let mut document_rules: Vec<&str> = Vec::new();

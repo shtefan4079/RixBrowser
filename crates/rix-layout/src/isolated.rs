@@ -38,6 +38,7 @@ impl Default for IsolatedBox {
 
 pub(crate) struct IsolatedLayout {
     pub(crate) size: Size<f32>,
+    pub(crate) baseline: Option<f32>,
     boxes: Vec<(LayoutBoxId, IsolatedBox)>,
 }
 
@@ -322,8 +323,24 @@ pub(crate) fn layout_isolated(
         merge_atomic_subtrees(tree, context, &mut boxes, text_cache, font_db, depth);
     }
 
+    let mut last_baseline: Option<f32> = None;
+    let root_overflow = tree.get(root).map(|b| b.style.overflow_y.as_str()).unwrap_or("visible");
+    if root_overflow == "visible" {
+        for (_, entry) in &boxes {
+            if let Some(text_layout) = &entry.text_layout {
+                for line in &text_layout.lines {
+                    let b = entry.content.y + line.baseline;
+                    if last_baseline.is_none() || Some(b) > last_baseline {
+                        last_baseline = Some(b);
+                    }
+                }
+            }
+        }
+    }
+
     Some(IsolatedLayout {
         size,
+        baseline: last_baseline,
         boxes: boxes.into_iter().collect(),
     })
 }

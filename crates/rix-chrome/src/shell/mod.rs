@@ -310,6 +310,8 @@ pub struct BrowserShell {
     pub compositor: Compositor,
     pub chrome_layer_id: usize,
     pub surface_layer_id: usize,
+    pub overlay_layer_id: usize,
+    pub internal_scroll_y: f32,
     pub pages: HashMap<u32, PageContent>,
     pub storage: Option<rix_storage::StorageEngine>,
     pub http_client: HttpClient,
@@ -327,7 +329,7 @@ pub struct BrowserShell {
     chrome_font_resources: ChromeFontResources,
     chrome_ua_index: RuleIndex,
     chrome_author_index: RuleIndex,
-    surface_layer_key: Option<(u32, u64, u32, u32, u32, u32, u32, u32)>,
+    surface_layer_key: Option<(u32, u64, bool, u32, u32, u32, u32, u32, u32)>,
     navigation_tx: tokio::sync::mpsc::UnboundedSender<NavigationCompletion>,
     navigation_rx: tokio::sync::mpsc::UnboundedReceiver<NavigationCompletion>,
     pending_navigations: HashMap<u32, u64>,
@@ -423,6 +425,7 @@ impl BrowserShell {
         let mut compositor = Compositor::new();
         let chrome_layer_id = compositor.create_layer(10);
         let surface_layer_id = compositor.create_layer(20);
+        let overlay_layer_id = compositor.create_layer(30);
 
         let event_loop = EventLoop::new(web_state.clone());
         let process_mgr = BrowserProcessManager::new();
@@ -457,13 +460,15 @@ impl BrowserShell {
             compositor,
             chrome_layer_id,
             surface_layer_id,
+            overlay_layer_id,
+            internal_scroll_y: 0.0,
             pages: HashMap::new(),
             storage,
             http_client,
             navigation_resource_policy: NavigationResourcePolicy::default(),
             page_worker_command: None,
-            homepage: "https://www.youtube.com/".to_string(),
-            omnibox_text: "https://www.google.com".to_string(),
+            homepage: "rix://newtab".to_string(),
+            omnibox_text: "".to_string(),
             omnibox_focused: false,
             omnibox_selection: TextSelection::default(),
             search_engine_template: "https://www.google.com/search?q={query}".to_string(),
@@ -522,6 +527,7 @@ impl BrowserShell {
         shell.omnibox_selection = TextSelection::collapsed(shell.omnibox_text.chars().count());
         shell.set_chrome_omnibox_value(&shell.omnibox_text.clone());
         shell.notify_chrome_tabs_changed();
+        let _ = shell.recompute_layout();
         Ok(shell)
     }
 

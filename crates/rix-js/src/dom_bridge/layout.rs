@@ -1293,6 +1293,7 @@ fn register_match_media(context: &mut Context) -> JsResult<()> {
         r#"
         (function(matchesQuery) {
             const slots = new WeakMap();
+            const activeLists = [];
             const constructorToken = Symbol('MediaQueryList constructor token');
             function slot(value) {
                 const state = slots.get(value);
@@ -1303,8 +1304,14 @@ fn register_match_media(context: &mut Context) -> JsResult<()> {
                 constructor(media, token) {
                     super();
                     if (token !== constructorToken) throw new TypeError('Illegal constructor: MediaQueryList');
-                    const state = {media, onchange: null};
+                    const initialMatches = media !== '' && matchesQuery(media);
+                    const state = {media, onchange: null, lastMatches: initialMatches};
                     slots.set(this, state);
+                    if (typeof WeakRef !== 'undefined') {
+                        activeLists.push(new WeakRef(this));
+                    } else {
+                        activeLists.push(this);
+                    }
                 }
                 get media() { return slot(this).media; }
                 get matches() { const media = slot(this).media; return media !== '' && matchesQuery(media); }
@@ -1336,10 +1343,48 @@ fn register_match_media(context: &mut Context) -> JsResult<()> {
             });
             Object.defineProperty(globalThis, 'MediaQueryList', {value: MediaQueryList, configurable: true, writable: true});
             Object.defineProperty(globalThis, 'MediaQueryListEvent', {value: MediaQueryListEvent, configurable: true, writable: true});
+            Object.defineProperty(globalThis, '__rix_notify_match_media', {
+                value: function() {
+                    let writeIdx = 0;
+                    for (let i = 0; i < activeLists.length; i++) {
+                        const item = activeLists[i];
+                        const mql = (item && typeof item.deref === 'function') ? item.deref() : item;
+                        if (!mql) continue;
+                        activeLists[writeIdx++] = item;
+                        const state = slots.get(mql);
+                        if (!state) continue;
+                        const currentMatches = state.media !== '' && matchesQuery(state.media);
+                        if (currentMatches !== state.lastMatches) {
+                            state.lastMatches = currentMatches;
+                            const event = new MediaQueryListEvent('change', {
+                                media: state.media,
+                                matches: currentMatches,
+                            });
+                            try {
+                                mql.dispatchEvent(event);
+                            } catch (err) {
+                                if (typeof console !== 'undefined' && console.error) console.error(err);
+                            }
+                        }
+                    }
+                    activeLists.length = writeIdx;
+                },
+                writable: true,
+                configurable: true,
+            });
         })(__rix_match_media_matches);
         delete globalThis.__rix_match_media_matches;
         "#,
     ))?;
+    Ok(())
+}
+
+pub fn notify_match_media(context: &mut Context) -> JsResult<()> {
+    if let Ok(func) = context.global_object().get(js_string!("__rix_notify_match_media"), context) {
+        if func.is_callable() {
+            func.as_callable().unwrap().call(&JsValue::undefined(), &[], context)?;
+        }
+    }
     Ok(())
 }
 
