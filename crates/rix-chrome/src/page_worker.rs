@@ -2581,13 +2581,16 @@ fn run_worker_runtime() -> Result<(), String> {
     } else {
         rix_css::preferred_color_scheme()
     };
-    if initial_scheme == rix_css::ColorScheme::Dark {
+    {
         let mut doc = shared_document.borrow_mut();
-        let root = doc.root();
-        if let Some(html_id) = doc.query_selector(root, "html") {
+        if let Some(html_id) = doc.document_element() {
             if let Some(NodeData::Element(elem)) = doc.get_mut(html_id) {
-                if (url.contains("youtube.com") || url.contains("youtu.be")) && !elem.has_attribute("dark") {
-                    elem.set_attribute("dark", "");
+                if url.contains("youtube.com") || url.contains("youtu.be") {
+                    if initial_scheme == rix_css::ColorScheme::Dark {
+                        elem.set_attribute("dark", "");
+                    } else {
+                        elem.remove_attribute("dark");
+                    }
                 }
             }
         }
@@ -3214,8 +3217,7 @@ fn run_worker_runtime() -> Result<(), String> {
                 {
                     let doc_rc = state.borrow().document.clone();
                     let mut doc = doc_rc.borrow_mut();
-                    let root = doc.root();
-                    if let Some(html_id) = doc.query_selector(root, "html") {
+                    if let Some(html_id) = doc.document_element() {
                         if let Some(NodeData::Element(elem)) = doc.get_mut(html_id) {
                             if url.contains("youtube.com") || url.contains("youtu.be") {
                                 if scheme == rix_css::ColorScheme::Dark {
@@ -3230,6 +3232,24 @@ fn run_worker_runtime() -> Result<(), String> {
                     doc.bump_revision();
                 }
                 let _ = rix_js::dom_bridge::notify_match_media(runtime.context_mut());
+                if url.contains("youtube.com") || url.contains("youtu.be") {
+                    let is_dark = scheme == rix_css::ColorScheme::Dark;
+                    let js_code = format!(
+                        r#"try {{
+                            if (document.documentElement) {{
+                                if ({is_dark}) {{
+                                    document.documentElement.setAttribute("dark", "");
+                                }} else {{
+                                    document.documentElement.removeAttribute("dark");
+                                }}
+                            }}
+                            if (typeof window !== 'undefined') {{
+                                window.dispatchEvent(new CustomEvent("yt-dark-mode-toggled-action", {{ detail: {is_dark} }}));
+                            }}
+                        }} catch (_) {{}}"#
+                    );
+                    let _ = runtime.evaluate(&js_code);
+                }
                 send(Update::Busy)?;
                 send(Update::TaskStarted {
                     label: "theme changed notification".into(),

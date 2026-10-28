@@ -288,7 +288,18 @@ pub(super) async fn load_navigation_content_progressive(
     }
     let html = String::from_utf8(response.body)
         .unwrap_or_else(|e| String::from_utf8_lossy(&e.into_bytes()).into_owned());
-    let document = parse_html(&html);
+    let mut document = parse_html(&html);
+    if final_url.contains("youtube.com") || final_url.contains("youtu.be") {
+        if let Some(html_id) = document.document_element() {
+            if let Some(NodeData::Element(elem)) = document.get_mut(html_id) {
+                if theme == "dark" {
+                    elem.set_attribute("dark", "");
+                } else {
+                    elem.remove_attribute("dark");
+                }
+            }
+        }
+    }
     if let Err(error) = validate_page_complexity(&document) {
         let mut content = simple_navigation_content(
             &final_url,

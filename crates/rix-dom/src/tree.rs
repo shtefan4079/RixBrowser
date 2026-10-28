@@ -52,6 +52,12 @@ impl Document {
         self.root
     }
 
+    pub fn document_element(&self) -> Option<NodeId> {
+        self.children(self.root).find(|child| {
+            matches!(self.get(*child), Some(NodeData::Element(_)))
+        })
+    }
+
     pub fn node_count(&self) -> usize {
         self.arena.len()
     }

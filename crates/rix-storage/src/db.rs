@@ -615,6 +615,24 @@ impl StorageEngine {
         Ok(())
     }
 
+    pub fn clear_all_local_storage(&self) -> Result<()> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(TABLE_LOCAL_STORAGE)?;
+            let keys_to_delete: Vec<String> = table
+                .iter()?
+                .filter_map(|item| item.ok())
+                .map(|(k, _)| k.value().to_string())
+                .collect();
+
+            for k in keys_to_delete {
+                let _ = table.remove(k.as_str())?;
+            }
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
     pub fn get_all_local_storage(&self, origin: &str) -> Result<HashMap<String, String>> {
         let prefix = format!("{origin}\0");
         let read_txn = self.db.begin_read()?;

@@ -633,20 +633,27 @@ impl BrowserShell {
             for cmd in cookie_cmds {
                 match cmd {
                     rix_js::privileged::CookieCommand::DeleteForDomain(domain) => {
-                        let _ = storage.delete_cookies_for_domain(&domain);
-                        let _ = storage.clear_local_storage(&format!("https://{domain}"));
-                        let _ = storage.clear_local_storage(&format!("http://{domain}"));
-                        if domain.contains("youtube.com") {
+                        let clean = domain.trim().trim_start_matches('.').to_lowercase();
+                        let root_domain = clean.trim_start_matches("www.").to_string();
+                        let _ = storage.delete_cookies_for_domain(&clean);
+                        let _ = storage.delete_cookies_for_domain(&root_domain);
+                        let _ = storage.clear_local_storage(&format!("https://{clean}"));
+                        let _ = storage.clear_local_storage(&format!("http://{clean}"));
+                        let _ = storage.clear_local_storage(&format!("https://{root_domain}"));
+                        let _ = storage.clear_local_storage(&format!("https://www.{root_domain}"));
+                        if clean.contains("youtube.com") {
                             let _ = storage.delete_cookies_for_domain("google.com");
                             let _ = storage.clear_local_storage("https://www.google.com");
+                            let _ = storage.clear_local_storage("https://google.com");
                             let _ = storage.clear_local_storage("https://consent.youtube.com");
                         }
-                        if active_tab_url.contains(&domain) {
+                        if active_tab_url.contains(&clean) || active_tab_url.contains(&root_domain) {
                             should_reload = true;
                         }
                     }
                     rix_js::privileged::CookieCommand::ClearAll => {
                         let _ = storage.clear_cookies();
+                        let _ = storage.clear_all_local_storage();
                         if !is_internal {
                             should_reload = true;
                         }

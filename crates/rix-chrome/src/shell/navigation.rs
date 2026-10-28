@@ -190,12 +190,13 @@ impl BrowserShell {
         let mut title = "New Tab".to_string();
 
         let theme_str = self.shell_theme();
-        if theme_str == "dark" {
-            let root = doc.root();
-            if let Some(html_id) = doc.query_selector(root, "html") {
-                if let Some(NodeData::Element(elem)) = doc.get_mut(html_id) {
-                    if (url.contains("youtube.com") || url.contains("youtu.be")) && !elem.has_attribute("dark") {
+        if let Some(html_id) = doc.document_element() {
+            if let Some(NodeData::Element(elem)) = doc.get_mut(html_id) {
+                if url.contains("youtube.com") || url.contains("youtu.be") {
+                    if theme_str == "dark" {
                         elem.set_attribute("dark", "");
+                    } else {
+                        elem.remove_attribute("dark");
                     }
                 }
             }
@@ -378,16 +379,6 @@ impl BrowserShell {
                     let _ = storage.set_cookie(rix_storage::models::Cookie {
                         name: "PREF".to_string(),
                         value: pref_val.to_string(),
-                        domain: ".youtube.com".to_string(),
-                        path: "/".to_string(),
-                        expires_at: Some(u64::MAX / 2),
-                        secure: true,
-                        http_only: false,
-                        same_site: rix_storage::models::SameSitePolicy::Lax,
-                    });
-                    let _ = storage.set_cookie(rix_storage::models::Cookie {
-                        name: "SOCS".to_string(),
-                        value: "CAISFAgDEgoxMDA2OTk3NTE5GgJlbiABGgYIgNP_1gY".to_string(),
                         domain: ".youtube.com".to_string(),
                         path: "/".to_string(),
                         expires_at: Some(u64::MAX / 2),
@@ -924,16 +915,6 @@ impl BrowserShell {
                 let _ = storage.set_cookie(rix_storage::models::Cookie {
                     name: "PREF".to_string(),
                     value: pref_val.to_string(),
-                    domain: ".youtube.com".to_string(),
-                    path: "/".to_string(),
-                    expires_at: Some(u64::MAX / 2),
-                    secure: true,
-                    http_only: false,
-                    same_site: rix_storage::models::SameSitePolicy::Lax,
-                });
-                let _ = storage.set_cookie(rix_storage::models::Cookie {
-                    name: "SOCS".to_string(),
-                    value: "CAISFAgDEgoxMDA2OTk3NTE5GgJlbiABGgYIgNP_1gY".to_string(),
                     domain: ".youtube.com".to_string(),
                     path: "/".to_string(),
                     expires_at: Some(u64::MAX / 2),

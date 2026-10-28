@@ -170,6 +170,19 @@ impl BrowserShell {
         rix_css::clear_media_query_cache();
         self.http_client.set_preferred_color_scheme(&theme_str);
         rix_js::web_api::set_shared_network_client(self.http_client.clone());
+        if let Some(storage) = self.storage.as_ref().or_else(|| self.http_client.storage()) {
+            let pref_val = if theme_str == "dark" { "f6=400" } else { "f6=8" };
+            let _ = storage.set_cookie(rix_storage::models::Cookie {
+                name: "PREF".to_string(),
+                value: pref_val.to_string(),
+                domain: ".youtube.com".to_string(),
+                path: "/".to_string(),
+                expires_at: Some(u64::MAX / 2),
+                secure: true,
+                http_only: false,
+                same_site: rix_storage::models::SameSitePolicy::Lax,
+            });
+        }
         let theme = match self.customization.theme_mode() {
             ThemeMode::Dark => Some("dark"),
             ThemeMode::Light => Some("light"),
@@ -206,8 +219,7 @@ impl BrowserShell {
             }
         }
         for page in self.pages.values_mut() {
-            let root = page.document.root();
-            if let Some(html_id) = page.document.query_selector(root, "html") {
+            if let Some(html_id) = page.document.document_element() {
                 if let Some(NodeData::Element(elem)) = page.document.get_mut(html_id) {
                     if page.url.contains("youtube.com") || page.url.contains("youtu.be") {
                         if theme_str == "dark" {

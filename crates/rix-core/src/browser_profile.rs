@@ -14,7 +14,7 @@ impl BrowserProfile {
     pub fn system_default() -> Self {
         let platform = system_platform();
         let user_agent = format!(
-            "Mozilla/5.0 ({}) RixBrowser/{}",
+            "Mozilla/5.0 ({}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 RixBrowser/{}",
             user_agent_platform(&platform),
             env!("CARGO_PKG_VERSION")
         );
