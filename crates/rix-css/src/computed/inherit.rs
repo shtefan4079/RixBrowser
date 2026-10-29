@@ -170,7 +170,17 @@ pub(super) fn apply_inherit(style: &mut ComputedStyle, parent: Option<&ComputedS
         "column-gap" => style.column_gap = Some(p.column_gap.unwrap_or(p.gap)),
         "grid-template-columns" => style.grid_template_columns = p.grid_template_columns.clone(),
         "grid-template-rows" => style.grid_template_rows = p.grid_template_rows.clone(),
-        "border-radius" => style.border_radius = p.border_radius,
+        "border-radius" => {
+            style.border_radius = p.border_radius;
+            style.border_top_left_radius = p.border_top_left_radius;
+            style.border_top_right_radius = p.border_top_right_radius;
+            style.border_bottom_right_radius = p.border_bottom_right_radius;
+            style.border_bottom_left_radius = p.border_bottom_left_radius;
+        }
+        "border-top-left-radius" => style.border_top_left_radius = p.border_top_left_radius,
+        "border-top-right-radius" => style.border_top_right_radius = p.border_top_right_radius,
+        "border-bottom-right-radius" => style.border_bottom_right_radius = p.border_bottom_right_radius,
+        "border-bottom-left-radius" => style.border_bottom_left_radius = p.border_bottom_left_radius,
         "box-shadow" => style.box_shadow = p.box_shadow,
         "border-width" => style.border_width = p.border_width,
         "border-color" => style.border_color = p.border_color,
@@ -373,7 +383,17 @@ pub(super) fn apply_initial(style: &mut ComputedStyle, name: &str) {
         "justify-self" => style.justify_self = None,
         "grid-row" | "grid-row-start" => style.grid_row_start = None,
         "grid-column" | "grid-column-start" => style.grid_column_start = None,
-        "border-radius" => style.border_radius = d.border_radius,
+        "border-radius" => {
+            style.border_radius = d.border_radius;
+            style.border_top_left_radius = d.border_top_left_radius;
+            style.border_top_right_radius = d.border_top_right_radius;
+            style.border_bottom_right_radius = d.border_bottom_right_radius;
+            style.border_bottom_left_radius = d.border_bottom_left_radius;
+        }
+        "border-top-left-radius" => style.border_top_left_radius = d.border_top_left_radius,
+        "border-top-right-radius" => style.border_top_right_radius = d.border_top_right_radius,
+        "border-bottom-right-radius" => style.border_bottom_right_radius = d.border_bottom_right_radius,
+        "border-bottom-left-radius" => style.border_bottom_left_radius = d.border_bottom_left_radius,
         "box-shadow" => style.box_shadow = d.box_shadow,
         "border-width" => style.border_width = d.border_width,
         "border-color" => style.border_color = d.border_color,

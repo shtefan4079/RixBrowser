@@ -351,13 +351,38 @@ fn compute_style_from_matched(
     };
 
     if let Some(NodeData::Element(elem)) = doc.get(node) {
-        if matches!(
+        let is_media_or_replaced = matches!(
             elem.name.local.as_str(),
             "img" | "svg" | "video" | "canvas" | "iframe" | "object" | "embed" | "input"
-        ) {
+        );
+        let is_custom_element = elem.name.local.contains('-');
+        if is_media_or_replaced || is_custom_element {
             for property in ["width", "height"] {
                 if let Some(value) = elem.get_attribute(property) {
                     apply_declaration(&mut style, property, value, &computed_ctx);
+                }
+            }
+            if is_custom_element
+                && elem.get_attribute("width").is_some()
+                && elem.get_attribute("height").is_none()
+                && style.aspect_ratio.is_none()
+            {
+                style.aspect_ratio = Some(1.0);
+            }
+        }
+        if elem.name.local.as_str() == "img" && style.width.is_none() && style.height.is_none() {
+            if let Some(parent) = doc.parent(node).and_then(|p| doc.get(p)) {
+                if let NodeData::Element(parent_elem) = parent {
+                    if parent_elem.name.local.contains('-') {
+                        if let Some(pw) = parent_elem.get_attribute("width") {
+                            apply_declaration(&mut style, "width", pw, &computed_ctx);
+                            if let Some(ph) = parent_elem.get_attribute("height") {
+                                apply_declaration(&mut style, "height", ph, &computed_ctx);
+                            } else if style.aspect_ratio.is_none() {
+                                apply_declaration(&mut style, "height", pw, &computed_ctx);
+                            }
+                        }
+                    }
                 }
             }
         }

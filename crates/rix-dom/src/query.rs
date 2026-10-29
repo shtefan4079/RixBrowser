@@ -970,7 +970,12 @@ pub fn matches_compound(doc: &Document, node: NodeId, predicates: &[SimpleSelect
                     }
                 }
                 PseudoClass::Empty => {
-                    if doc.children(node).next().is_some() {
+                    let has_content = doc.children(node).any(|c| match doc.get(c) {
+                        Some(NodeData::Element(_)) => true,
+                        Some(NodeData::Text(t)) => !t.trim().is_empty(),
+                        _ => false,
+                    });
+                    if has_content {
                         return false;
                     }
                 }
@@ -1267,5 +1272,31 @@ mod tests {
 
         let res = ComplexSelector::parse("div.content > p:first-child").unwrap();
         assert_eq!(res.len(), 1);
+    }
+
+    #[test]
+    fn test_empty_pseudo_class_with_comments_and_whitespace() {
+        let mut doc = Document::new();
+        let root = doc.root();
+
+        let div1 = doc.new_node(NodeData::Element(ElementData::new_html("div")));
+        doc.append_child(root, div1);
+        let comment = doc.new_node(NodeData::Comment("css-build:shady".into()));
+        doc.append_child(div1, comment);
+
+        let div2 = doc.new_node(NodeData::Element(ElementData::new_html("div")));
+        doc.append_child(root, div2);
+        let text = doc.new_node(NodeData::Text("  \n  ".into()));
+        doc.append_child(div2, text);
+
+        let div3 = doc.new_node(NodeData::Element(ElementData::new_html("div")));
+        doc.append_child(root, div3);
+        let content_text = doc.new_node(NodeData::Text("Rust".into()));
+        doc.append_child(div3, content_text);
+
+        let empty_matches = doc.query_selector_all(root, "div:empty");
+        assert!(empty_matches.contains(&div1), "Div with comment only must match :empty");
+        assert!(empty_matches.contains(&div2), "Div with whitespace text only must match :empty");
+        assert!(!empty_matches.contains(&div3), "Div with real text must not match :empty");
     }
 }

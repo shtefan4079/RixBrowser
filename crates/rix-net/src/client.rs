@@ -1030,7 +1030,7 @@ impl HttpClient {
             .header("accept-language", &self.accept_language)
             .header(
                 ACCEPT,
-                "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,image/svg+xml,image/*;q=0.8,*/*;q=0.5",
             )
             .header(ACCEPT_ENCODING, "gzip, deflate, br");
 

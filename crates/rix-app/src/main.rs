@@ -35,11 +35,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Starting {}", version_string());
 
+    let process_start = std::time::Instant::now();
+    let t_cli = std::time::Instant::now();
     let raw_args: Vec<String> = env::args().collect();
     let cli = CliArgs::parse_from(raw_args.clone()).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(2);
     });
+    eprintln!("[rix-timing] CLI parse took {:.3}ms", t_cli.elapsed().as_secs_f64() * 1000.0);
 
     if cli.show_help {
         println!("{}", CliArgs::usage());
@@ -51,6 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let t_cfg = std::time::Instant::now();
     let config_path = AppConfig::default_path();
     let file_config = AppConfig::load_or_default(&config_path).unwrap_or_else(|e| {
         eprintln!("warning: {e}; falling back to defaults");
@@ -60,11 +64,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = config.save_to_path(&config_path) {
         eprintln!("warning: cannot persist config: {e}");
     }
+    eprintln!("[rix-timing] Config load/persist took {:.3}ms", t_cfg.elapsed().as_secs_f64() * 1000.0);
 
     let no_display = env::var("DISPLAY").is_err() && env::var("WAYLAND_DISPLAY").is_err();
     let is_headless = cli.headless || config.headless || no_display;
     let control_port = config.control_port;
 
+    let t_storage = std::time::Instant::now();
     let (storage, secret_warning) =
         StorageEngine::open_with_system_secrets(&AppConfig::data_dir().join("profile.redb"))
             .await?;
@@ -72,9 +78,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         warn!("{warning}");
         eprintln!("{warning}");
     }
+    eprintln!("[rix-timing] Storage & Secrets open took {:.3}ms", t_storage.elapsed().as_secs_f64() * 1000.0);
 
+    let t_server = std::time::Instant::now();
     let (tx, mut rx) = mpsc::channel(64);
     rix_chrome::server::start_control_server(tx, control_port);
+    eprintln!("[rix-timing] Control server spawn took {:.3}ms", t_server.elapsed().as_secs_f64() * 1000.0);
 
     if is_headless {
         info!("Running RixBrowser in headless automation mode");
@@ -102,13 +111,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let startup_start = std::time::Instant::now();
     info!("Initializing native desktop window via winit");
+    let t_boot = std::time::Instant::now();
     let mut shell = boot_shell_with_config(&config, storage.clone(), secret_warning)?;
-    eprintln!("[{:.3}] boot_shell took {}ms", startup_start.elapsed().as_secs_f64(), startup_start.elapsed().as_millis());
+    eprintln!("[rix-timing] boot_shell took {:.3}ms (since process start: {:.3}ms)", t_boot.elapsed().as_secs_f64() * 1000.0, process_start.elapsed().as_secs_f64() * 1000.0);
     let t_nav = std::time::Instant::now();
     if !config.homepage.is_empty() && config.homepage != "about:blank" {
         shell.start_navigation(1, &config.homepage);
     }
-    eprintln!("[{:.3}] start_navigation took {}ms", startup_start.elapsed().as_secs_f64(), t_nav.elapsed().as_millis());
+    eprintln!("[rix-timing] start_navigation took {:.3}ms", t_nav.elapsed().as_secs_f64() * 1000.0);
     println!(
         "RixBrowser UI Shell initialized on {}x{} surface.",
         config.window_width as u32, config.window_height as u32
@@ -118,14 +128,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let t_el = std::time::Instant::now();
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
-    eprintln!("[{:.3}] EventLoop::build took {}ms", startup_start.elapsed().as_secs_f64(), t_el.elapsed().as_millis());
+    eprintln!("[rix-timing] EventLoop::build took {:.3}ms", t_el.elapsed().as_secs_f64() * 1000.0);
     let (gpu_tx, gpu_rx) = std::sync::mpsc::sync_channel::<VelloRenderer>(1);
     std::thread::Builder::new()
         .name("gpu-warmup".into())
         .spawn(move || {
             let t0 = std::time::Instant::now();
             let renderer = VelloRenderer::new();
-            eprintln!("[rix-timing] Background VelloRenderer::new took {}ms", t0.elapsed().as_millis());
+            eprintln!("[rix-timing] Background VelloRenderer::new took {:.3}ms", t0.elapsed().as_secs_f64() * 1000.0);
             let _ = gpu_tx.send(renderer);
         })
         .ok();
@@ -143,6 +153,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mouse_pos: (0.0, 0.0),
         mouse_pressed: false,
         modifiers: ModifiersState::default(),
+        logged_resources: 0,
+        frame_count: 0,
     };
     tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
@@ -208,6 +220,8 @@ struct RixBrowserApp {
     mouse_pos: (f32, f32),
     mouse_pressed: bool,
     modifiers: ModifiersState,
+    logged_resources: usize,
+    frame_count: u64,
 }
 
 fn to_cursor_icon(name: &str) -> winit::window::CursorIcon {
@@ -278,17 +292,19 @@ impl ApplicationHandler<AppEvent> for RixBrowserApp {
             let t0 = std::time::Instant::now();
             match event_loop.create_window(window_attrs) {
                 Ok(window) => {
-                    eprintln!("[rix-timing] create_window took {}ms", t0.elapsed().as_millis());
+                    eprintln!("[rix-timing] create_window took {:.3}ms", t0.elapsed().as_secs_f64() * 1000.0);
                     info!("Native desktop window created successfully");
                     println!("Native window active. Press Close or Ctrl+C to exit.");
                     let win = Arc::new(window);
                     let scale = win.scale_factor();
                     let size = win.inner_size();
                     if let Some(ref mut shell) = self.shell {
+                        let t_res = std::time::Instant::now();
                         let _ = shell.resize(
                             (size.width as f64 / scale) as f32,
                             (size.height as f64 / scale) as f32,
                         );
+                        eprintln!("[rix-timing] initial shell.resize took {:.3}ms", t_res.elapsed().as_secs_f64() * 1000.0);
                     }
                     #[cfg(feature = "software")]
                     {
@@ -324,8 +340,51 @@ impl ApplicationHandler<AppEvent> for RixBrowserApp {
             }
         }
         if let Some(ref mut shell) = self.shell {
+            let t_step = std::time::Instant::now();
             let _page_tasks = shell.step_event_loop();
+            let step_ms = t_step.elapsed().as_secs_f64() * 1000.0;
+
+            let t_poll = std::time::Instant::now();
             let _navigations = shell.poll_navigation_completions();
+            let poll_ms = t_poll.elapsed().as_secs_f64() * 1000.0;
+
+            if step_ms > 0.3 || poll_ms > 0.3 {
+                eprintln!("[rix-timing] event_loop_tick: step={:.3}ms poll_nav={:.3}ms", step_ms, poll_ms);
+            }
+
+            let active_id = shell.active_tab_id();
+            if let Some(page) = shell.pages.get_mut(&active_id) {
+                while self.logged_resources < page.resource_trace.len() {
+                    let res = &page.resource_trace[self.logged_resources];
+                    eprintln!(
+                        "[rix-network-timing] {:?} {} status={:?} bytes={:?} elapsed={:.2}ms url={}",
+                        res.kind,
+                        res.method,
+                        res.status,
+                        res.response_bytes,
+                        res.elapsed_ms,
+                        res.request_url
+                    );
+                    self.logged_resources += 1;
+                }
+                if let Some(worker) = &page.page_worker {
+                    let timings = worker.borrow_mut().take_script_timings();
+                    for t in timings {
+                        eprintln!(
+                            "[rix-script-timing] script #{}: eval={:.2}ms (parse={:.2}ms, compile={:.2}ms, exec={:.2}ms, promise_jobs={:.2}ms) bytes={} url={}",
+                            t.index,
+                            t.evaluation_ms,
+                            t.parse_ms,
+                            t.compile_ms,
+                            t.execute_ms,
+                            t.promise_jobs_ms,
+                            t.source_bytes,
+                            t.source_url
+                        );
+                    }
+                }
+            }
+
             let animation_frame_pending = shell.has_pending_animation_frame_opportunity();
             let needs_redraw = shell.take_needs_redraw();
             if needs_redraw || animation_frame_pending {
@@ -403,6 +462,7 @@ impl ApplicationHandler<AppEvent> for RixBrowserApp {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                let t_input = std::time::Instant::now();
                 let scale = self
                     .window
                     .as_ref()
@@ -410,14 +470,31 @@ impl ApplicationHandler<AppEvent> for RixBrowserApp {
                     .unwrap_or(1.0);
                 self.mouse_pos = ((position.x / scale) as f32, (position.y / scale) as f32);
                 if let Some(ref mut shell) = self.shell {
+                    let t_cur = std::time::Instant::now();
                     let cursor_name = shell.cursor_at(self.mouse_pos.0, self.mouse_pos.1);
+                    let cur_ms = t_cur.elapsed().as_secs_f64() * 1000.0;
                     if let Some(ref win) = self.window {
                         win.set_cursor(to_cursor_icon(cursor_name));
                     }
+                    let t_chrome = std::time::Instant::now();
                     if shell.update_chrome_pointer(Some(self.mouse_pos), self.mouse_pressed) {
                         if let Some(ref win) = self.window {
                             win.request_redraw();
                         }
+                    }
+                    let chrome_ms = t_chrome.elapsed().as_secs_f64() * 1000.0;
+                    let t_disp = std::time::Instant::now();
+                    let _ = pollster::block_on(shell.handle_input(IpcInputEvent::MouseMove {
+                        x: self.mouse_pos.0,
+                        y: self.mouse_pos.1,
+                    }));
+                    let disp_ms = t_disp.elapsed().as_secs_f64() * 1000.0;
+                    let total_input_ms = t_input.elapsed().as_secs_f64() * 1000.0;
+                    if total_input_ms > 0.1 {
+                        eprintln!(
+                            "[rix-input-timing] MouseMove ({:.1}, {:.1}): total={:.3}ms (cursor={:.3}ms, chrome_ptr={:.3}ms, dom_dispatch={:.3}ms)",
+                            self.mouse_pos.0, self.mouse_pos.1, total_input_ms, cur_ms, chrome_ms, disp_ms
+                        );
                     }
                 }
             }
@@ -428,6 +505,10 @@ impl ApplicationHandler<AppEvent> for RixBrowserApp {
                 }
                 if let Some(ref mut shell) = self.shell {
                     shell.update_chrome_pointer(None, false);
+                    let _ = pollster::block_on(shell.handle_input(IpcInputEvent::MouseMove {
+                        x: -10000.0,
+                        y: -10000.0,
+                    }));
                 }
                 if let Some(ref win) = self.window {
                     win.request_redraw();
@@ -500,6 +581,7 @@ impl ApplicationHandler<AppEvent> for RixBrowserApp {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                let t_scroll = std::time::Instant::now();
                 let scroll_amount = match delta {
                     MouseScrollDelta::LineDelta(_x, y) => -y * 40.0,
                     MouseScrollDelta::PixelDelta(pos) => {
@@ -517,11 +599,13 @@ impl ApplicationHandler<AppEvent> for RixBrowserApp {
                         win.request_redraw();
                     }
                 }
+                eprintln!("[rix-input-timing] MouseWheel: {:.3}ms", t_scroll.elapsed().as_secs_f64() * 1000.0);
             }
             WindowEvent::KeyboardInput {
                 event: key_event, ..
             } => {
                 if key_event.state == ElementState::Pressed {
+                    let t_key_start = std::time::Instant::now();
                     if let Some(ref mut shell) = self.shell {
                         let key = match &key_event.logical_key {
                             Key::Named(NamedKey::Enter) => "Enter".to_string(),
@@ -570,37 +654,45 @@ impl ApplicationHandler<AppEvent> for RixBrowserApp {
                         if let Some(ref win) = self.window {
                             win.request_redraw();
                         }
+                        eprintln!("[rix-input-timing] KeyboardInput ({}): {:.3}ms", key, t_key_start.elapsed().as_secs_f64() * 1000.0);
                     }
                 }
             }
             WindowEvent::RedrawRequested => {
                 let win = self.window.clone();
                 if let (Some(ref mut shell), Some(win)) = (&mut self.shell, win) {
+                    let frame_start = std::time::Instant::now();
+                    let t_anim = std::time::Instant::now();
                     let _ = shell.animation_frame_opportunity(std::time::Instant::now());
+                    let anim_ms = t_anim.elapsed().as_secs_f64() * 1000.0;
+
                     let size = win.inner_size();
                     let width = size.width.max(1);
                     let height = size.height.max(1);
 
+                    let t_rf = std::time::Instant::now();
                     let (logical_scene, stats) = shell.render_frame();
+                    let rf_ms = t_rf.elapsed().as_secs_f64() * 1000.0;
+
+                    let t_append = std::time::Instant::now();
                     let mut scene = vello::Scene::new();
                     scene.append(
                         &logical_scene,
                         Some(vello::kurbo::Affine::scale(win.scale_factor())),
                     );
-                    tracing::debug!(
-                        "GPU frame {}: {:.2}ms ({:.0} FPS, 120fps={})",
-                        stats.frame_number,
-                        stats.frame_duration_ms,
-                        stats.fps,
-                        stats.is_120_fps_capable
-                    );
+                    let append_ms = t_append.elapsed().as_secs_f64() * 1000.0;
+
+                    self.frame_count += 1;
 
                     if let Some(gpu) = self.try_ensure_gpu() {
+                        let t_surf = std::time::Instant::now();
                         let surface_ready =
                             pollster::block_on(gpu.ensure_surface(win.clone(), width, height));
+                        let surf_ms = t_surf.elapsed().as_secs_f64() * 1000.0;
                         match surface_ready {
                             Ok(()) => {
                                 win.pre_present_notify();
+                                let t_gpu = std::time::Instant::now();
                                 if let Err(e) = gpu.render(&scene) {
                                     eprintln!("GPU present error: {e}");
                                     #[cfg(feature = "software")]
@@ -610,6 +702,19 @@ impl ApplicationHandler<AppEvent> for RixBrowserApp {
                                         let _ = &scene;
                                     }
                                 }
+                                let gpu_render_ms = t_gpu.elapsed().as_secs_f64() * 1000.0;
+                                let total_frame_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
+                                eprintln!(
+                                    "[rix-frame-timing] frame #{}: total={:.2}ms (render_frame={:.2}ms, scene_append={:.3}ms, ensure_surface={:.2}ms, gpu_render={:.2}ms, anim={:.3}ms, layers={})",
+                                    self.frame_count,
+                                    total_frame_ms,
+                                    rf_ms,
+                                    append_ms,
+                                    surf_ms,
+                                    gpu_render_ms,
+                                    anim_ms,
+                                    stats.layers_composited
+                                );
                             }
                             Err(e) => {
                                 eprintln!("GPU surface error: {e}");

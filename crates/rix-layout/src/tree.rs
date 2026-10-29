@@ -547,14 +547,18 @@ impl LayoutTree {
                     }
                 }
 
+                let is_out_of_flow = |b: &LayoutBoxData| {
+                    b.style.position == "absolute" || b.style.position == "fixed"
+                };
                 let generates_box = |b: &LayoutBoxData| b.style.display != Display::None;
                 let is_inline_level = |b: &LayoutBoxData| {
-                    matches!(b.box_type, AnonymousBoxType::Text(_))
-                        || b.style.display.is_inline_level()
+                    !is_out_of_flow(b)
+                        && (matches!(b.box_type, AnonymousBoxType::Text(_))
+                            || b.style.display.is_inline_level())
                 };
                 let has_block = child_boxes.iter().any(|&cb| {
                     let b = &self.boxes[cb.0];
-                    generates_box(b) && !is_inline_level(b)
+                    generates_box(b) && !is_inline_level(b) && !is_out_of_flow(b)
                 });
                 let has_inline_or_text = child_boxes
                     .iter()
@@ -565,9 +569,10 @@ impl LayoutTree {
                     let mut pending_inline = Vec::new();
 
                     for cb in child_boxes {
-                        let is_inline = is_inline_level(&self.boxes[cb.0]);
-
-                        if is_inline {
+                        let b = &self.boxes[cb.0];
+                        if is_out_of_flow(b) {
+                            normalized_children.push(cb);
+                        } else if is_inline_level(b) {
                             pending_inline.push(cb);
                         } else {
                             if !pending_inline.is_empty() {
@@ -607,6 +612,20 @@ impl LayoutTree {
         let anon_id = LayoutBoxId(self.boxes.len());
         let mut anon_style = parent_style.clone();
         anon_style.display = Display::Block;
+        anon_style.width = None;
+        anon_style.width_percent = None;
+        anon_style.height = None;
+        anon_style.height_percent = None;
+        anon_style.min_width = None;
+        anon_style.min_width_percent = None;
+        anon_style.max_width = None;
+        anon_style.max_width_percent = None;
+        anon_style.min_height = None;
+        anon_style.min_height_percent = None;
+        anon_style.max_height = None;
+        anon_style.max_height_percent = None;
+        anon_style.position = "static".to_string();
+        anon_style.box_sizing = "content-box".to_string();
         anon_style.padding_top = 0.0;
         anon_style.padding_right = 0.0;
         anon_style.padding_bottom = 0.0;

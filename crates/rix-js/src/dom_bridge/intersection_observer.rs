@@ -119,6 +119,7 @@ pub(super) fn register(context: &mut Context) -> JsResult<()> {
                 let result = copyRect(target.getBoundingClientRect());
                 for (let ancestor = composedParentElement(target); ancestor; ancestor = composedParentElement(ancestor)) {
                     if (state.root instanceof Element && ancestor === state.root) break;
+                    if (ancestor === document.body || ancestor === document.documentElement) continue;
                     const style = getComputedStyle(ancestor);
                     const overflowX = style.getPropertyValue('overflow-x');
                     const overflowY = style.getPropertyValue('overflow-y');
@@ -279,7 +280,9 @@ pub(super) fn register(context: &mut Context) -> JsResult<()> {
                         observation.lastUpdate = now;
                         let bounding = rect(0, 0, 0, 0);
                         let intersection = rect(0, 0, 0, 0);
-                        const validRoot = target.isConnected && target.ownerDocument === document &&
+                        const clientRects = target.getClientRects();
+                        const hasBox = clientRects && clientRects.length > 0;
+                        const validRoot = hasBox && target.isConnected && target.ownerDocument === document &&
                             (state.root === null || state.root === document ||
                                 (state.root.ownerDocument === document && state.root.isConnected &&
                                     isDescendant(target, state.root)));
@@ -291,9 +294,12 @@ pub(super) fn register(context: &mut Context) -> JsResult<()> {
                         const targetArea = area(bounding);
                         const ratio = targetArea > 0 ? area(intersection) / targetArea : (isIntersecting ? 1 : 0);
                         const index = thresholdIndex(state.thresholds, ratio);
-                        if (index === observation.thresholdIndex && isIntersecting === observation.isIntersecting) continue;
+                        const hasPositiveHeight = intersection.height > 0;
+                        if (index === observation.thresholdIndex && isIntersecting === observation.isIntersecting &&
+                            hasPositiveHeight === observation.hasPositiveHeight) continue;
                         observation.thresholdIndex = index;
                         observation.isIntersecting = isIntersecting;
+                        observation.hasPositiveHeight = hasPositiveHeight;
                         state.records.push(new IntersectionObserverEntry(entryToken, {
                             time: now,
                             rootBounds: new DOMRectReadOnly(rootBounds.x, rootBounds.y, rootBounds.width, rootBounds.height),

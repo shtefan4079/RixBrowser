@@ -367,19 +367,33 @@ pub(crate) fn measure_replaced_element(
         .aspect_ratio
         .or(box_data.intrinsic_ratio)
         .or_else(|| (natural.0 > 0.0 && natural.1 > 0.0).then_some(natural.0 / natural.1));
-    let resolve = |length: Option<f32>, percent: Option<f32>, basis: Option<f32>| {
-        length.or_else(|| {
-            percent
-                .zip(basis)
-                .map(|(percent, basis)| percent * basis / 100.0)
-        })
+
+    let (padding_h, padding_v, border_h, border_v) = if style.box_sizing == "border-box" {
+        (
+            style.padding_left + style.padding_right,
+            style.padding_top + style.padding_bottom,
+            style.border_left_width + style.border_right_width,
+            style.border_top_width + style.border_bottom_width,
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    };
+
+    let resolve = |length: Option<f32>, percent: Option<f32>, basis: Option<f32>, pb: f32| {
+        length
+            .or_else(|| {
+                percent
+                    .zip(basis)
+                    .map(|(percent, basis)| percent * basis / 100.0)
+            })
+            .map(|val| (val - pb).max(0.0))
     };
     let width = known
         .width
-        .or_else(|| resolve(style.width, style.width_percent, parent_size.width));
+        .or_else(|| resolve(style.width, style.width_percent, parent_size.width, padding_h + border_h));
     let height = known
         .height
-        .or_else(|| resolve(style.height, style.height_percent, parent_size.height));
+        .or_else(|| resolve(style.height, style.height_percent, parent_size.height, padding_v + border_v));
     let mut size = match (width, height, ratio) {
         (None, None, Some(ratio)) if box_data.is_svg && box_data.intrinsic_size.is_none() => {
             let max_width = parent_size.width.unwrap_or(300.0).min(300.0).max(0.0);
@@ -411,8 +425,8 @@ pub(crate) fn measure_replaced_element(
     };
     size.width = clamp(
         size.width,
-        resolve(style.min_width, style.min_width_percent, parent_size.width),
-        resolve(style.max_width, style.max_width_percent, parent_size.width),
+        resolve(style.min_width, style.min_width_percent, parent_size.width, padding_h + border_h),
+        resolve(style.max_width, style.max_width_percent, parent_size.width, padding_h + border_h),
     );
     if height.is_none() {
         if let Some(ratio) = ratio {
@@ -425,19 +439,21 @@ pub(crate) fn measure_replaced_element(
             style.min_height,
             style.min_height_percent,
             parent_size.height,
+            padding_v + border_v,
         ),
         resolve(
             style.max_height,
             style.max_height_percent,
             parent_size.height,
+            padding_v + border_v,
         ),
     );
     if width.is_none() && height.is_some() || width.is_none() && height.is_none() {
         if let Some(ratio) = ratio {
             size.width = clamp(
                 size.height * ratio,
-                resolve(style.min_width, style.min_width_percent, parent_size.width),
-                resolve(style.max_width, style.max_width_percent, parent_size.width),
+                resolve(style.min_width, style.min_width_percent, parent_size.width, padding_h + border_h),
+                resolve(style.max_width, style.max_width_percent, parent_size.width, padding_h + border_h),
             );
         }
     }
@@ -497,12 +513,14 @@ impl TaffyLayoutEngine {
         let mut inline_paragraphs = InlineParagraphCache::default();
         let mut box_to_taffy = HashMap::with_capacity(tree.len());
         let mut fixed_nodes = Vec::new();
+        let mut unclaimed_absolute_nodes = Vec::new();
         let taffy_html_root = self.build_taffy_tree_recursive(
             tree,
             root_id,
             &mut box_to_taffy,
             false,
             &mut fixed_nodes,
+            &mut unclaimed_absolute_nodes,
         )?;
         let taffy_root = if fixed_nodes.is_empty() {
             taffy_html_root
@@ -630,6 +648,9 @@ impl TaffyLayoutEngine {
             0.0,
             0.0,
             viewport_width,
+            0.0,
+            0.0,
+            viewport_width,
             viewport_width,
             viewport_height,
             &box_to_taffy,
@@ -655,6 +676,7 @@ impl TaffyLayoutEngine {
         let contexts = tree.inline_contexts().to_vec();
         let atomic_boxes: HashSet<LayoutBoxId> = contexts
             .iter()
+            .filter(|context| supports_context(tree, context))
             .flat_map(|context| context.items.iter())
             .filter_map(|item| match item {
                 InlineFlowItem::Atomic(id) => Some(*id),
@@ -726,6 +748,7 @@ impl TaffyLayoutEngine {
         map: &mut HashMap<LayoutBoxId, NodeId>,
         is_fixed_subtree: bool,
         fixed_nodes: &mut Vec<NodeId>,
+        unclaimed_absolute_nodes: &mut Vec<NodeId>,
     ) -> Result<NodeId, String> {
         let box_data = match tree.get(box_id) {
             Some(b) => b,
@@ -740,29 +763,36 @@ impl TaffyLayoutEngine {
             let mut sorted_children = box_data.children.clone();
             sorted_children.sort_by_key(|&cid| tree.get(cid).map(|b| b.style.order).unwrap_or(0));
             for child_id in sorted_children {
-                let child_is_fixed = tree
-                    .get(child_id)
-                    .is_some_and(|b| b.style.position == "fixed");
+                let child_style = tree.get(child_id).map(|b| &b.style);
+                let child_is_fixed = child_style.is_some_and(|s| s.position == "fixed");
+                let child_is_absolute = child_style.is_some_and(|s| s.position == "absolute");
+
+                let mut child_unclaimed = Vec::new();
+                let child_node = self.build_taffy_tree_recursive(
+                    tree,
+                    child_id,
+                    map,
+                    if child_is_fixed { true } else { is_fixed_subtree },
+                    fixed_nodes,
+                    &mut child_unclaimed,
+                )?;
+
                 if child_is_fixed && !is_fixed_subtree {
-                    let child_node = self.build_taffy_tree_recursive(
-                        tree,
-                        child_id,
-                        map,
-                        true,
-                        fixed_nodes,
-                    )?;
                     fixed_nodes.push(child_node);
+                    fixed_nodes.extend(child_unclaimed);
+                } else if child_is_absolute {
+                    unclaimed_absolute_nodes.push(child_node);
+                    unclaimed_absolute_nodes.extend(child_unclaimed);
                 } else {
-                    let child_node = self.build_taffy_tree_recursive(
-                        tree,
-                        child_id,
-                        map,
-                        is_fixed_subtree,
-                        fixed_nodes,
-                    )?;
                     taffy_children.push(child_node);
+                    unclaimed_absolute_nodes.extend(child_unclaimed);
                 }
             }
+        }
+
+        let is_positioned_container = box_data.style.position != "static" || box_data.parent.is_none();
+        if is_positioned_container {
+            taffy_children.splice(0..0, unclaimed_absolute_nodes.drain(..));
         }
 
         let mut taffy_style = taffy_style_for_box(&box_data.style, box_data);
@@ -814,12 +844,24 @@ impl TaffyLayoutEngine {
             width: match (style.min_width, style.min_width_percent) {
                 (Some(w), _) => LengthPercentageAuto::length(w),
                 (None, Some(pct)) => LengthPercentageAuto::percent(pct / 100.0),
-                (None, None) => LengthPercentageAuto::auto(),
+                (None, None) => {
+                    if style.overflow_x != "visible" || style.text_overflow == "ellipsis" {
+                        LengthPercentageAuto::length(0.0)
+                    } else {
+                        LengthPercentageAuto::auto()
+                    }
+                }
             },
             height: match (style.min_height, style.min_height_percent) {
                 (Some(h), _) => LengthPercentageAuto::length(h),
                 (None, Some(pct)) => LengthPercentageAuto::percent(pct / 100.0),
-                (None, None) => LengthPercentageAuto::auto(),
+                (None, None) => {
+                    if style.overflow_y != "visible" {
+                        LengthPercentageAuto::length(0.0)
+                    } else {
+                        LengthPercentageAuto::auto()
+                    }
+                }
             },
         };
 
@@ -1042,6 +1084,9 @@ impl TaffyLayoutEngine {
         parent_x: f32,
         parent_y: f32,
         containing_width: f32,
+        positioned_x: f32,
+        positioned_y: f32,
+        positioned_width: f32,
         viewport_width: f32,
         viewport_height: f32,
         map: &HashMap<LayoutBoxId, NodeId>,
@@ -1055,10 +1100,22 @@ impl TaffyLayoutEngine {
             .layout(taffy_node)
             .map_err(|e| format!("Failed to read Taffy layout: {e:?}"))?;
 
+
         let width = layout.size.width;
         let height = layout.size.height;
-        let mut abs_x = parent_x + layout.location.x;
-        let mut abs_y = parent_y + layout.location.y;
+        let is_absolute = tree
+            .get(box_id)
+            .is_some_and(|b| b.style.position == "absolute");
+        let mut abs_x = if is_absolute {
+            positioned_x + layout.location.x
+        } else {
+            parent_x + layout.location.x
+        };
+        let mut abs_y = if is_absolute {
+            positioned_y + layout.location.y
+        } else {
+            parent_y + layout.location.y
+        };
 
         if let Some(box_data) = tree.get(box_id) {
             if box_data.style.position == "fixed" {
@@ -1099,6 +1156,11 @@ impl TaffyLayoutEngine {
             box_mut.dimensions.padding.left =
                 padding_side(box_mut.style.padding_left_percent, box_mut.style.padding_left);
 
+            box_mut.dimensions.border.top = box_mut.style.border_top_width;
+            box_mut.dimensions.border.right = box_mut.style.border_right_width;
+            box_mut.dimensions.border.bottom = box_mut.style.border_bottom_width;
+            box_mut.dimensions.border.left = box_mut.style.border_left_width;
+
             let p_left = box_mut.dimensions.padding.left;
             let p_top = box_mut.dimensions.padding.top;
             let p_right = box_mut.dimensions.padding.right;
@@ -1122,6 +1184,15 @@ impl TaffyLayoutEngine {
             (box_mut.children.clone(), content_w)
         };
 
+        let is_positioned = tree
+            .get(box_id)
+            .is_some_and(|b| b.style.position != "static" || b.parent.is_none());
+        let (next_pos_x, next_pos_y, next_pos_w) = if is_positioned {
+            (abs_x, abs_y, width)
+        } else {
+            (positioned_x, positioned_y, positioned_width)
+        };
+
         for child_id in children {
             if !map.contains_key(&child_id) {
                 continue;
@@ -1140,6 +1211,9 @@ impl TaffyLayoutEngine {
                 origin_x,
                 origin_y,
                 child_containing_width,
+                if child_is_fixed { 0.0 } else { next_pos_x },
+                if child_is_fixed { 0.0 } else { next_pos_y },
+                if child_is_fixed { viewport_width } else { next_pos_w },
                 viewport_width,
                 viewport_height,
                 map,
@@ -1201,7 +1275,11 @@ pub(crate) fn apply_inline_flex_approximation(
     }
     taffy_style.display = taffy::style::Display::Flex;
     taffy_style.flex_direction = taffy::style::FlexDirection::Row;
-    taffy_style.flex_wrap = taffy::style::FlexWrap::Wrap;
+    taffy_style.flex_wrap = if box_data.style.white_space == "nowrap" {
+        taffy::style::FlexWrap::NoWrap
+    } else {
+        taffy::style::FlexWrap::Wrap
+    };
     if box_data.style.text_align == "center" {
         taffy_style.justify_content = Some(taffy::style::AlignContent::CENTER);
     } else if box_data.style.text_align == "right" {
@@ -1496,6 +1574,85 @@ mod tests {
     use rix_text::FontDatabase;
 
     #[test]
+    fn test_flex_stretch() {
+        use taffy::prelude::*;
+        let mut taffy: TaffyTree<()> = TaffyTree::new();
+
+        // Box 59 (input): height 22
+        let b59 = taffy.new_leaf(taffy::style::Style {
+            size: Size { width: Dimension::percent(1.0), height: Dimension::length(22.0) },
+            ..Default::default()
+        }).unwrap();
+
+        // Box 53 (form): display flex, flex_grow 1
+        let b53 = taffy.new_with_children(taffy::style::Style {
+            display: taffy::style::Display::Flex,
+            flex_grow: 1.0,
+            ..Default::default()
+        }, &[b59]).unwrap();
+
+        // Box 52 (input box): display flex, flex_grow 1, padding [2, 4, 2, 48], border 1
+        let b52 = taffy.new_with_children(taffy::style::Style {
+            display: taffy::style::Display::Flex,
+            flex_grow: 1.0,
+            flex_shrink: 1.0,
+            flex_basis: Dimension::percent(0.0),
+            padding: taffy::geometry::Rect {
+                top: LengthPercentage::length(2.0),
+                right: LengthPercentage::length(4.0),
+                bottom: LengthPercentage::length(2.0),
+                left: LengthPercentage::length(48.0),
+            },
+            border: taffy::geometry::Rect {
+                top: LengthPercentage::length(1.0),
+                right: LengthPercentage::length(1.0),
+                bottom: LengthPercentage::length(1.0),
+                left: LengthPercentage::length(1.0),
+            },
+            ..Default::default()
+        }, &[b53]).unwrap();
+
+        // Box 70 (button): width 64
+        let b70 = taffy.new_leaf(taffy::style::Style {
+            size: Size { width: Dimension::length(64.0), height: Dimension::auto() },
+            border: taffy::geometry::Rect {
+                top: LengthPercentage::length(1.0),
+                right: LengthPercentage::length(1.0),
+                bottom: LengthPercentage::length(1.0),
+                left: LengthPercentage::length(1.0),
+            },
+            ..Default::default()
+        }).unwrap();
+
+        // Box 51 (input container): display flex, width 100%, height 100%
+        let b51 = taffy.new_with_children(taffy::style::Style {
+            display: taffy::style::Display::Flex,
+            size: Size { width: Dimension::percent(1.0), height: Dimension::percent(1.0) },
+            ..Default::default()
+        }, &[b52, b70]).unwrap();
+
+        // Box 50 (wrapper): width 100%
+        let b50 = taffy.new_with_children(taffy::style::Style {
+            size: Size { width: Dimension::percent(1.0), height: Dimension::auto() },
+            ..Default::default()
+        }, &[b51]).unwrap();
+
+        // Box 49 (host): display flex, height 40
+        let b49 = taffy.new_with_children(taffy::style::Style {
+            display: taffy::style::Display::Flex,
+            size: Size { width: Dimension::length(636.0), height: Dimension::length(40.0) },
+            ..Default::default()
+        }, &[b50]).unwrap();
+
+        taffy.compute_layout(b49, Size::MAX_CONTENT).unwrap();
+        println!("b49 layout: {:?}", taffy.layout(b49).unwrap());
+        println!("b50 layout: {:?}", taffy.layout(b50).unwrap());
+        println!("b51 layout: {:?}", taffy.layout(b51).unwrap());
+        println!("b52 layout: {:?}", taffy.layout(b52).unwrap());
+        println!("b70 layout: {:?}", taffy.layout(b70).unwrap());
+    }
+
+    #[test]
     fn test_text_layout_cache_lookup_and_hit() {
         let mut cache = TextLayoutCache::default();
         let db = FontDatabase::new();
@@ -1721,5 +1878,568 @@ mod tests {
         assert_eq!(dialog.dimensions.content.height, 337.0);
         assert_eq!(content.dimensions.content.width, 700.0);
         assert!(content.dimensions.content.height > 300.0);
+    }
+
+    #[test]
+    fn test_youtube_search_icon_vertical_centering() {
+        let mut engine = TaffyLayoutEngine::new();
+        let mut tree = LayoutTree::new();
+
+        let input_box_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Flex,
+                position: "relative".to_string(),
+                align_items: Some("center".to_string()),
+                border_top_width: 1.0,
+                border_bottom_width: 1.0,
+                border_left_width: 1.0,
+                border_right_width: 1.0,
+                padding_top: 2.0,
+                padding_bottom: 2.0,
+                padding_left: 48.0,
+                padding_right: 4.0,
+                height: None, // No explicit height on input_box, height comes from auto or parent
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: None,
+            children: Vec::new(),
+        });
+
+        let form_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Flex,
+                flex_direction: "column".to_string(),
+                flex_grow: 1.0,
+                position: "static".to_string(),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(input_box_id),
+            children: Vec::new(),
+        });
+
+        let icon_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::InlineFlex,
+                position: "absolute".to_string(),
+                left: Some(0.0),
+                width: Some(20.0),
+                height: Some(20.0),
+                padding_left: 16.0,
+                padding_right: 12.0,
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(form_id),
+            children: Vec::new(),
+        });
+
+        let input_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                height: Some(24.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(form_id),
+            children: Vec::new(),
+        });
+
+        let container_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Flex,
+                position: "static".to_string(),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: None,
+            children: vec![input_box_id],
+        });
+
+        let wrapper_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                position: "static".to_string(),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: None,
+            children: vec![container_id],
+        });
+
+        let host_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Flex,
+                position: "relative".to_string(),
+                height: Some(40.0),
+                width: Some(550.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: None,
+            children: vec![wrapper_id],
+        });
+
+        let masthead_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                position: "fixed".to_string(),
+                top: Some(0.0),
+                left: Some(0.0),
+                width: Some(1024.0),
+                height: Some(56.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: None,
+            children: vec![host_id],
+        });
+
+        tree.get_mut(form_id).unwrap().children = vec![icon_id, input_id];
+        tree.get_mut(input_box_id).unwrap().children = vec![form_id];
+        tree.get_mut(input_box_id).unwrap().parent = Some(container_id);
+        tree.get_mut(container_id).unwrap().parent = Some(wrapper_id);
+        tree.get_mut(wrapper_id).unwrap().parent = Some(host_id);
+        tree.get_mut(host_id).unwrap().parent = Some(masthead_id);
+        tree.root = Some(masthead_id);
+
+        engine.compute_layout(&mut tree, 1024.0, 600.0).unwrap();
+
+        let input_box = tree.get(input_box_id).unwrap();
+        let icon = tree.get(icon_id).unwrap();
+
+        assert_eq!(input_box.dimensions.border.top, 1.0);
+        assert_eq!(input_box.dimensions.border.left, 1.0);
+
+        // Input box border-box is [y = 0.0, height = 30.0].
+        // Vertical center of input box is 15.0.
+        // Icon height is 20.0, so centered icon content_y must be (30.0 - 20.0) / 2 = 5.0.
+        assert!(
+            (icon.dimensions.content.y - 5.0).abs() < 1e-3,
+            "Icon should be vertically centered inside its relative flex container even when inside a fixed subtree, got {}",
+            icon.dimensions.content.y
+        );
+    }
+
+    #[test]
+    fn test_promo_renderer_text_layout() {
+        use rix_dom::{Document, ElementData, NodeData};
+        let mut doc = Document::new();
+
+        // <div id="sections">
+        let sections = doc.new_node(NodeData::Element(ElementData::new_html("div")));
+        doc.append_child(doc.root(), sections);
+
+        // <ytd-guide-signin-promo-renderer>
+        let promo = doc.new_node(NodeData::Element(ElementData::new_html("ytd-guide-signin-promo-renderer")));
+        doc.append_child(sections, promo);
+
+        // <yt-formatted-string>
+        let formatted = doc.new_node(NodeData::Element(ElementData::new_html("yt-formatted-string")));
+        doc.append_child(promo, formatted);
+
+        // Text: "Sign in to like videos, comment, and subscribe."
+        let text_node = doc.new_node(NodeData::Text("Sign in to like videos, comment, and subscribe.".into()));
+        doc.append_child(formatted, text_node);
+
+        let mut styles = HashMap::new();
+        let mut sections_style = ComputedStyle::default();
+        sections_style.display = Display::Block;
+        sections_style.width = Some(240.0);
+        styles.insert(sections, sections_style);
+
+        let mut promo_style = ComputedStyle::default();
+        promo_style.display = Display::InlineBlock;
+        promo_style.padding_top = 16.0;
+        promo_style.padding_bottom = 16.0;
+        promo_style.padding_left = 32.0;
+        promo_style.padding_right = 32.0;
+        styles.insert(promo, promo_style);
+
+        let mut formatted_style = ComputedStyle::default();
+        formatted_style.display = Display::Block;
+        formatted_style.font_size = 14.0;
+        formatted_style.line_height = 20.0;
+        formatted_style.line_height_normal = false;
+        styles.insert(formatted, formatted_style);
+
+        let mut tree = LayoutTree::from_dom(&doc, doc.root(), &styles);
+        println!("Tree boxes count: {}", tree.len());
+        for b in tree.iter() {
+            println!("  Box id={:?}, type={:?}, dom_node={:?}, parent={:?}, children={:?}", b.id, b.box_type, b.dom_node, b.parent, b.children);
+        }
+        for ctx in tree.inline_contexts() {
+            println!("  Context block={:?}, text={:?}, items count={}", ctx.block, ctx.text, ctx.items.len());
+        }
+
+        let mut engine = TaffyLayoutEngine::new();
+        engine.compute_layout(&mut tree, 1024.0, 600.0).unwrap();
+
+        for b in tree.iter() {
+            println!("  After layout Box id={:?}, rect={:?}, has_text_layout={}", b.id, b.dimensions.content, b.text_layout.is_some());
+        }
+
+        let text_box = tree.iter().find(|b| matches!(b.box_type, AnonymousBoxType::Text(_))).unwrap();
+        assert!(text_box.text_layout.is_some(), "Text box should have text_layout");
+        assert!(text_box.dimensions.content.height > 0.0, "Text box should have non-zero height");
+    }
+
+    #[test]
+    fn test_sign_in_button_icon_positioning() {
+        let mut engine = TaffyLayoutEngine::new();
+        let mut tree = LayoutTree::new();
+
+        let parent_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Flex,
+                position: "relative".to_string(),
+                align_items: Some("center".to_string()),
+                box_sizing: "border-box".to_string(),
+                padding_left: 15.0,
+                padding_right: 15.0,
+                border_left_width: 1.0,
+                border_right_width: 1.0,
+                border_top_width: 1.0,
+                border_bottom_width: 1.0,
+                height: Some(38.0),
+                width: None,
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: None,
+            children: Vec::new(),
+        });
+
+        let icon_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(1),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                width: Some(24.0),
+                height: Some(24.0),
+                margin_right: 6.0,
+                margin_left: -6.0,
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(parent_id),
+            children: Vec::new(),
+        });
+
+        let text_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(2),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                width: Some(42.0),
+                height: Some(20.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(parent_id),
+            children: Vec::new(),
+        });
+
+        let icon_box_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(3),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::InlineFlex,
+                width: Some(24.0),
+                height: Some(24.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(icon_id),
+            children: Vec::new(),
+        });
+        let svg_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(4),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                width_percent: Some(100.0),
+                height_percent: Some(100.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: true,
+            is_svg: true,
+            intrinsic_size: Some((24.0, 24.0)),
+            intrinsic_ratio: Some(1.0),
+            parent: Some(icon_box_id),
+            children: Vec::new(),
+        });
+        tree.get_mut(icon_box_id).unwrap().children = vec![svg_id];
+        tree.get_mut(icon_id).unwrap().children = vec![icon_box_id];
+        tree.get_mut(parent_id).unwrap().children = vec![icon_id, text_id];
+
+        let root_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(3),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                width: Some(1000.0),
+                height: Some(1000.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: None,
+            children: vec![parent_id],
+        });
+        tree.get_mut(parent_id).unwrap().parent = Some(root_id);
+        tree.root = Some(root_id);
+
+        engine.compute_layout(&mut tree, 1000.0, 1000.0).unwrap();
+
+        let parent = tree.get(parent_id).unwrap();
+        let icon = tree.get(icon_id).unwrap();
+        let text = tree.get(text_id).unwrap();
+
+        println!("Parent: content={:?}, padding={:?}", parent.dimensions.content, parent.dimensions.padding);
+        println!("Icon: content={:?}, margin={:?}", icon.dimensions.content, icon.dimensions.margin);
+        println!("IconBox: content={:?}", tree.get(icon_box_id).unwrap().dimensions.content);
+        println!("Svg: content={:?}", tree.get(svg_id).unwrap().dimensions.content);
+        println!("Text: content={:?}", text.dimensions.content);
+    }
+
+    #[test]
+    fn test_masthead_absolute_background_static_top() {
+        let mut engine = TaffyLayoutEngine::new();
+        let mut tree = LayoutTree::new();
+
+        let root_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(0),
+            dom_node: None,
+            style: ComputedStyle {
+                display: Display::Block,
+                width: Some(1024.0),
+                height: Some(800.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: None,
+            children: Vec::new(),
+        });
+
+        let masthead_container_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(1),
+            dom_node: None,
+            style: ComputedStyle {
+                position: "fixed".to_string(),
+                top: Some(0.0),
+                width: Some(1024.0),
+                display: Display::Block,
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(root_id),
+            children: Vec::new(),
+        });
+
+        let masthead_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(2),
+            dom_node: None,
+            style: ComputedStyle {
+                position: "static".to_string(),
+                display: Display::Block,
+                width_percent: Some(100.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(masthead_container_id),
+            children: Vec::new(),
+        });
+
+        let background_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(3),
+            dom_node: None,
+            style: ComputedStyle {
+                position: "absolute".to_string(),
+                width_percent: Some(100.0),
+                height: Some(56.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(masthead_id),
+            children: Vec::new(),
+        });
+
+        let container_id = tree.push(LayoutBoxData {
+            id: LayoutBoxId(4),
+            dom_node: None,
+            style: ComputedStyle {
+                position: "static".to_string(),
+                display: Display::Block,
+                width_percent: Some(100.0),
+                height: Some(56.0),
+                ..ComputedStyle::default()
+            },
+            box_type: AnonymousBoxType::AnonymousBlock,
+            dimensions: BoxDimensions::default(),
+            text_layout: None,
+            inline_fragments: Vec::new(),
+            is_replaced: false,
+            is_svg: false,
+            intrinsic_size: None,
+            intrinsic_ratio: None,
+            parent: Some(masthead_id),
+            children: Vec::new(),
+        });
+
+        tree.get_mut(root_id).unwrap().children = vec![masthead_container_id];
+        tree.get_mut(masthead_container_id).unwrap().children = vec![masthead_id];
+        tree.get_mut(masthead_id).unwrap().children = vec![background_id, container_id];
+
+        tree.root = Some(root_id);
+        engine.compute_layout(&mut tree, 1024.0, 800.0).unwrap();
+
+        let bg_box = tree.get(background_id).unwrap();
+        assert_eq!(
+            bg_box.dimensions.content.y, 0.0,
+            "Masthead #background with top:auto must be placed at top 0.0, not pushed down to 56.0"
+        );
+        assert_eq!(bg_box.dimensions.content.height, 56.0);
     }
 }

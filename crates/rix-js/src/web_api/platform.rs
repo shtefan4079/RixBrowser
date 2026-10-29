@@ -704,6 +704,54 @@ pub fn register_standard_web_platform_apis(context: &mut Context) -> Result<(), 
             globalThis.webkitSpeechRecognition = SpeechRecognition;
         }
 
+        if (!globalThis.AudioContext) {
+            class BaseAudioContext extends EventTarget {
+                constructor() {
+                    super();
+                    this.state = 'suspended';
+                    this.sampleRate = 44100;
+                    this.currentTime = 0;
+                }
+                createMediaStreamSource() {
+                    return { connect() {}, disconnect() {} };
+                }
+                createGain() {
+                    return { gain: { value: 1 }, connect() {}, disconnect() {} };
+                }
+                createAnalyser() {
+                    return {
+                        fftSize: 2048,
+                        frequencyBinCount: 1024,
+                        minDecibels: -100,
+                        maxDecibels: -30,
+                        smoothingTimeConstant: 0.8,
+                        getByteFrequencyData() {},
+                        getByteTimeDomainData() {},
+                        getFloatFrequencyData() {},
+                        getFloatTimeDomainData() {},
+                        connect() {},
+                        disconnect() {}
+                    };
+                }
+                close() {
+                    this.state = 'closed';
+                    return Promise.resolve();
+                }
+                resume() {
+                    this.state = 'running';
+                    return Promise.resolve();
+                }
+                suspend() {
+                    this.state = 'suspended';
+                    return Promise.resolve();
+                }
+            }
+            class AudioContext extends BaseAudioContext {}
+            globalThis.BaseAudioContext = BaseAudioContext;
+            globalThis.AudioContext = AudioContext;
+            globalThis.webkitAudioContext = AudioContext;
+        }
+
         if (typeof navigator !== 'undefined' && !navigator.mediaDevices) {
             navigator.mediaDevices = {
                 getUserMedia: function() {
@@ -1542,7 +1590,7 @@ pub fn register_standard_web_platform_apis(context: &mut Context) -> Result<(), 
             });
         }
 
-        if (!globalThis.XMLHttpRequest && typeof globalThis.fetch === 'function') {
+        if (!globalThis.XMLHttpRequest) {
             const xhrSlots = new WeakMap();
             const uploadSlots = new WeakMap();
             const xhrState = xhr => {

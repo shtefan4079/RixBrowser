@@ -39,7 +39,7 @@ struct CachedLayout {
 }
 
 struct CachedNodeStyles {
-    key: (u64, u64),
+    key: (u64, u64, u64),
     styles: Rc<HashMap<NodeId, ComputedStyle>>,
 }
 
@@ -142,6 +142,7 @@ impl PageLayoutHost {
         let d_fonts = t_fonts.elapsed().as_millis();
         let t_key = std::time::Instant::now();
         let node_key = (
+            document.revision(),
             document.style_revision(),
             *self.inputs_revision.borrow(),
         );
@@ -174,7 +175,7 @@ impl PageLayoutHost {
                 tracing::warn!("Page layout failed: {error}");
             }
             let taffy_ms = t_taffy.elapsed().as_millis();
-            if std::env::var_os("RIX_WORKER_TRACE").is_some() && (from_dom_ms > 20 || taffy_ms > 20) {
+            if std::env::var_os("RIX_WORKER_TRACE").is_some() {
                 eprintln!("[rix-cached-layout] from_dom={}ms taffy={}ms", from_dom_ms, taffy_ms);
             }
             (layout, styles)
@@ -186,7 +187,7 @@ impl PageLayoutHost {
             let (tree, styles) =
                 compute_page_styles_and_layout_with_environment(document, &environment, fonts);
             let calc_ms = t_calc.elapsed().as_millis();
-            if std::env::var_os("RIX_WORKER_TRACE").is_some() && (env_ms > 20 || calc_ms > 20) {
+            if std::env::var_os("RIX_WORKER_TRACE").is_some() {
                 eprintln!("[rix-compute-sub] env={}ms calc={}ms", env_ms, calc_ms);
             }
             let styles = Rc::new(styles);
@@ -201,15 +202,18 @@ impl PageLayoutHost {
         if !inputs.image_sizes.is_empty() {
             let base = document_base_url(document, &self.url);
             let mut changed = false;
-            for node in document.descendants(document.root()) {
+            for node in document.descendants_with_shadow_roots(document.root()) {
                 let Some(NodeData::Element(element)) = document.get(node) else {
                     continue;
                 };
                 if element.name.local.as_str() != "img" {
                     continue;
                 }
-                let size = element
-                    .get_attribute("src")
+                let source = rix_dom::select_image_source(
+                    element.get_attribute("src"),
+                    element.get_attribute("srcset"),
+                );
+                let size = source
                     .and_then(|source| image_key(&base, source))
                     .and_then(|url| inputs.image_sizes.get(&url));
                 if let Some((image_width, image_height)) = size {
@@ -232,7 +236,7 @@ impl PageLayoutHost {
         let snap = LayoutSnapshot::with_styles(tree, styles);
         let d_snap = t_snap.elapsed().as_millis();
         let total = t_all.elapsed().as_millis();
-        if std::env::var_os("RIX_WORKER_TRACE").is_some() && total > 50 {
+        if std::env::var_os("RIX_WORKER_TRACE").is_some() {
             eprintln!(
                 "[rix-compute-breakdown] total={}ms inputs={}ms fonts={}ms key={}ms branch={}ms img={}ms snap={}ms",
                 total, d_inputs, d_fonts, d_key, d_branch, d_img, d_snap
@@ -319,6 +323,7 @@ impl LayoutHost for PageLayoutHost {
         }
 
         let node_key = (
+            document.revision(),
             document.style_revision(),
             *self.inputs_revision.borrow(),
         );
@@ -405,5 +410,14 @@ impl LayoutHost for PageLayoutHost {
 
     fn rendering_revision(&self) -> (u64, u64) {
         (*self.inputs_revision.borrow(), self.scroll_revision.get())
+    }
+
+    fn image_load_state(&self, url: &str) -> rix_js::dom_bridge::ImageLoadState {
+        let inputs = self.inputs.borrow();
+        if let Some(&(width, height)) = inputs.image_sizes.get(url) {
+            rix_js::dom_bridge::ImageLoadState::Loaded { width, height }
+        } else {
+            rix_js::dom_bridge::ImageLoadState::Pending
+        }
     }
 }

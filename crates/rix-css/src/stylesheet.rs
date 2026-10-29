@@ -1553,7 +1553,7 @@ pub fn default_user_agent_stylesheet() -> Arc<StyleSheet> {
         iframe { border: 2px inset; }
         head, style, title, script, meta, link, noscript, template { display: none !important; }
         input[type="hidden"], input[type=hidden] { display: none !important; }
-        [hidden] { display: none; }
+        [hidden] { display: none !important; }
         @media (prefers-color-scheme: dark) {
             html { color: #f1f1f1; background-color: #0f0f0f; }
             input, textarea { background-color: #222222; color: #f1f1f1; border-color: #555555; }

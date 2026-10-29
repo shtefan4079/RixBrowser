@@ -186,6 +186,18 @@ impl Default for FontDatabase {
 
 static SYSTEM_FONTS_CACHE: std::sync::OnceLock<FontDatabase> = std::sync::OnceLock::new();
 
+fn get_font_cache_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("RIX_FONT_CACHE_PATH") {
+        return Some(PathBuf::from(path));
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let cache_dir = PathBuf::from(home).join(".cache").join("rixbrowser");
+        let _ = std::fs::create_dir_all(&cache_dir);
+        return Some(cache_dir.join("font_paths_v1.txt"));
+    }
+    None
+}
+
 impl FontDatabase {
     pub fn new() -> Self {
         Self::default()
@@ -347,29 +359,66 @@ impl FontDatabase {
     }
 
     pub fn scan_system_fonts_with_limit(&mut self, limit: usize) -> usize {
-        let mut paths_to_scan = vec![
-            PathBuf::from("/usr/share/fonts/Adwaita"),
-            PathBuf::from("/usr/share/fonts/cantarell"),
-            PathBuf::from("/usr/share/fonts/liberation"),
-            PathBuf::from("/usr/share/fonts/noto"),
-            PathBuf::from("/usr/share/fonts/TTF"),
-            PathBuf::from("/usr/share/fonts/truetype"),
-            PathBuf::from("/usr/share/fonts"),
-            PathBuf::from("/usr/local/share/fonts"),
-        ];
+        let cache_path = get_font_cache_path();
+        let mut count = 0;
+        let mut loaded_paths = Vec::new();
 
-        if let Ok(home) = std::env::var("HOME") {
-            let home_path = PathBuf::from(home);
-            paths_to_scan.push(home_path.join(".local/share/fonts"));
-            paths_to_scan.push(home_path.join(".fonts"));
+        if let Some(ref cp) = cache_path {
+            if let Ok(content) = std::fs::read_to_string(cp) {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let path = Path::new(trimmed);
+                    if path.exists() {
+                        if let Ok(ids) = self.load_font_file(path) {
+                            count += ids.len();
+                            loaded_paths.push(path.to_path_buf());
+                            if count >= limit {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        let mut count = 0;
-        for root in paths_to_scan {
-            if root.exists() {
-                self.scan_dir_recursive(&root, &mut count, limit);
-                if count >= limit {
-                    break;
+        if count == 0 {
+            let mut paths_to_scan = vec![
+                PathBuf::from("/usr/share/fonts/Adwaita"),
+                PathBuf::from("/usr/share/fonts/cantarell"),
+                PathBuf::from("/usr/share/fonts/liberation"),
+                PathBuf::from("/usr/share/fonts/noto"),
+                PathBuf::from("/usr/share/fonts/TTF"),
+                PathBuf::from("/usr/share/fonts/truetype"),
+                PathBuf::from("/usr/share/fonts"),
+                PathBuf::from("/usr/local/share/fonts"),
+            ];
+
+            if let Ok(home) = std::env::var("HOME") {
+                let home_path = PathBuf::from(home);
+                paths_to_scan.push(home_path.join(".local/share/fonts"));
+                paths_to_scan.push(home_path.join(".fonts"));
+            }
+
+            for root in paths_to_scan {
+                if root.exists() {
+                    self.scan_dir_recursive(&root, &mut count, limit, &mut loaded_paths);
+                    if count >= limit {
+                        break;
+                    }
+                }
+            }
+
+            if let Some(ref cp) = cache_path {
+                if !loaded_paths.is_empty() {
+                    let text = loaded_paths
+                        .iter()
+                        .map(|p| p.to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let _ = std::fs::write(cp, text);
                 }
             }
         }
@@ -399,6 +448,30 @@ impl FontDatabase {
             family.contains("emoji") || family.contains("color")
         }) {
             self.default_emoji = Some(id);
+        }
+
+        if self.default_emoji.is_none() {
+            let emoji_candidates = [
+                "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+                "/usr/share/fonts/google-noto-color-emoji/NotoColorEmoji.ttf",
+                "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+                "/usr/share/fonts/noto-color-emoji/NotoColorEmoji.ttf",
+                "/usr/share/fonts/TTF/NotoColorEmoji.ttf",
+                "/System/Library/Fonts/Apple Color Emoji.ttc",
+                "/System/Library/Fonts/Apple Color Emoji.ttf",
+                "C:\\Windows\\Fonts\\seguiemj.ttf",
+            ];
+            for path_str in emoji_candidates {
+                let path = Path::new(path_str);
+                if path.exists() {
+                    if let Ok(ids) = self.load_font_file(path) {
+                        if let Some(&id) = ids.first() {
+                            self.default_emoji = Some(id);
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         self.set_family_aliases(crate::fontconfig::FamilyAliases::from_system());
@@ -457,7 +530,13 @@ impl FontDatabase {
             .map(|font| font.id)
     }
 
-    fn scan_dir_recursive(&mut self, dir: &Path, count: &mut usize, limit: usize) {
+    fn scan_dir_recursive(
+        &mut self,
+        dir: &Path,
+        count: &mut usize,
+        limit: usize,
+        loaded_paths: &mut Vec<PathBuf>,
+    ) {
         if *count >= limit {
             return;
         }
@@ -477,12 +556,13 @@ impl FontDatabase {
             }
 
             if path.is_dir() {
-                self.scan_dir_recursive(&path, count, limit);
+                self.scan_dir_recursive(&path, count, limit, loaded_paths);
             } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 let ext_lower = ext.to_lowercase();
                 if ext_lower == "ttf" || ext_lower == "otf" || ext_lower == "ttc" {
                     if let Ok(ids) = self.load_font_file(&path) {
                         *count += ids.len();
+                        loaded_paths.push(path);
                     }
                 }
             }
@@ -745,5 +825,40 @@ mod tests {
         assert_eq!(count1, count2);
         assert_eq!(db1.len(), db2.len());
         assert_eq!(db1.default_sans_serif, db2.default_sans_serif);
+    }
+
+    #[test]
+    fn test_emoji_font_loaded_and_covers() {
+        let mut db = FontDatabase::new();
+        db.scan_system_fonts();
+        if Path::new("/usr/share/fonts/noto/NotoColorEmoji.ttf").exists() {
+            assert!(db.default_emoji.is_some());
+            let emoji_font_id = db.default_emoji.unwrap();
+            let font = db.get_font(emoji_font_id).unwrap();
+            assert!(font.descriptor.family.contains("Emoji") || font.descriptor.family.contains("Color"));
+            let covering = db.find_covering_font('🎮', None);
+            assert_eq!(covering, Some(emoji_font_id));
+        }
+    }
+
+    #[test]
+    fn test_font_paths_cache_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!("rix_font_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let cache_file = temp_dir.join("test_font_cache.txt");
+
+        std::env::set_var("RIX_FONT_CACHE_PATH", cache_file.to_str().unwrap());
+
+        let mut db1 = FontDatabase::new();
+        let count1 = db1.scan_system_fonts_with_limit(8);
+        assert!(count1 > 0);
+        assert!(cache_file.exists());
+
+        let mut db2 = FontDatabase::new();
+        let count2 = db2.scan_system_fonts_with_limit(8);
+        assert_eq!(count1, count2);
+
+        std::env::remove_var("RIX_FONT_CACHE_PATH");
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

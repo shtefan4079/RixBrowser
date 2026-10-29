@@ -70,6 +70,13 @@ pub(crate) fn collect_inline_contexts(
             items: Vec::new(),
             pending_atomic_space: false,
         };
+        for &cid in &block.children {
+            if let Some(cb) = tree.get(cid) {
+                if matches!(cb.box_type, AnonymousBoxType::PseudoElement(rix_dom::query::PseudoElement::Before)) {
+                    collect_pseudo_box(tree, cid, node, &mut context);
+                }
+            }
+        }
         doc.for_each_composed_child(node, |child| {
             collect_node(
                 doc,
@@ -80,6 +87,13 @@ pub(crate) fn collect_inline_contexts(
                 &mut context,
             );
         });
+        for &cid in &block.children {
+            if let Some(cb) = tree.get(cid) {
+                if matches!(cb.box_type, AnonymousBoxType::PseudoElement(rix_dom::query::PseudoElement::After)) {
+                    collect_pseudo_box(tree, cid, node, &mut context);
+                }
+            }
+        }
 
         if context.items.iter().any(|item| {
             matches!(
@@ -141,11 +155,29 @@ fn collect_node(
                     context.items.push(InlineFlowItem::Atomic(layout_box));
                     context.pending_atomic_space = true;
                 } else {
+                    if let Some(box_data) = tree.get(layout_box) {
+                        for &cid in &box_data.children {
+                            if let Some(cb) = tree.get(cid) {
+                                if matches!(cb.box_type, AnonymousBoxType::PseudoElement(rix_dom::query::PseudoElement::Before)) {
+                                    collect_pseudo_box(tree, cid, node, context);
+                                }
+                            }
+                        }
+                    }
                     context.items.push(InlineFlowItem::InlineStart(layout_box));
                     doc.for_each_composed_child(node, |child| {
                         collect_node(doc, tree, child, style, styles, context);
                     });
                     context.items.push(InlineFlowItem::InlineEnd(layout_box));
+                    if let Some(box_data) = tree.get(layout_box) {
+                        for &cid in &box_data.children {
+                            if let Some(cb) = tree.get(cid) {
+                                if matches!(cb.box_type, AnonymousBoxType::PseudoElement(rix_dom::query::PseudoElement::After)) {
+                                    collect_pseudo_box(tree, cid, node, context);
+                                }
+                            }
+                        }
+                    }
                 }
             } else {
                 context
@@ -219,8 +251,115 @@ fn is_collapsible_space(ch: char) -> bool {
     matches!(ch, ' ' | '\t' | '\n' | '\r' | '\x0C')
 }
 
+fn collect_pseudo_box(
+    tree: &LayoutTree,
+    pseudo_box_id: LayoutBoxId,
+    parent_node: NodeId,
+    context: &mut InlineFormattingContext,
+) {
+    let Some(pseudo_box) = tree.get(pseudo_box_id) else {
+        return;
+    };
+    if pseudo_box.style.display == Display::None {
+        return;
+    }
+    context.items.push(InlineFlowItem::InlineStart(pseudo_box_id));
+    if pseudo_box.style.margin_left > 0.0
+        && !context.text.is_empty()
+        && !context.text.ends_with(' ')
+        && !context.text.ends_with('\n')
+    {
+        let run_index = context.runs.len();
+        let start = context.text.len();
+        context.runs.push(InlineTextRun {
+            source_node: parent_node,
+            source_box: Some(pseudo_box_id),
+            style: text_style(&pseudo_box.style),
+            range: start..start + 1,
+            forced_break: false,
+        });
+        context.items.push(InlineFlowItem::TextRun(run_index));
+        context.text.push(' ');
+    }
+    for &child_id in &pseudo_box.children {
+        if let Some(child_box) = tree.get(child_id) {
+            if let AnonymousBoxType::Text(ref text) = child_box.box_type {
+                append_text_run(context, parent_node, Some(child_id), &child_box.style, text);
+            }
+        }
+    }
+    if pseudo_box.style.margin_right > 0.0
+        && !context.text.is_empty()
+        && !context.text.ends_with(' ')
+        && !context.text.ends_with('\n')
+    {
+        let run_index = context.runs.len();
+        let start = context.text.len();
+        context.runs.push(InlineTextRun {
+            source_node: parent_node,
+            source_box: Some(pseudo_box_id),
+            style: text_style(&pseudo_box.style),
+            range: start..start + 1,
+            forced_break: false,
+        });
+        context.items.push(InlineFlowItem::TextRun(run_index));
+        context.text.push(' ');
+    }
+    context.items.push(InlineFlowItem::InlineEnd(pseudo_box_id));
+}
+
 fn text_style(style: &ComputedStyle) -> ComputedStyle {
     let mut text_style = style.clone();
     text_style.display = Display::Inline;
     text_style
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rix_dom::tree::Document;
+
+    #[test]
+    fn test_collect_pseudo_element_inlines() {
+        let mut doc = Document::new();
+        let root = doc.root();
+        let div = doc.create_element("div");
+        doc.append_child(root, div);
+        let span1 = doc.create_element("span");
+        let span2 = doc.create_element("span");
+        doc.append_child(div, span1);
+        doc.append_child(div, span2);
+        let t1 = doc.create_text("36K");
+        let t2 = doc.create_text("13h ago");
+        doc.append_child(span1, t1);
+        doc.append_child(span2, t2);
+
+        let mut styles = HashMap::new();
+        let mut div_style = ComputedStyle::default();
+        div_style.display = Display::Block;
+        styles.insert(div, div_style);
+
+        let mut span1_style = ComputedStyle::default();
+        span1_style.display = Display::Inline;
+        styles.insert(span1, span1_style);
+
+        let mut span2_style = ComputedStyle::default();
+        span2_style.display = Display::Inline;
+        let mut before_style = ComputedStyle::default();
+        before_style.display = Display::Inline;
+        before_style.content = Some("•".to_string());
+        before_style.margin_left = 4.0;
+        before_style.margin_right = 4.0;
+        span2_style.before = Some(Box::new(before_style));
+        styles.insert(span2, span2_style);
+
+        let tree = LayoutTree::from_dom(&doc, div, &styles);
+        let contexts = tree.inline_contexts();
+        assert_eq!(contexts.len(), 1);
+        let ctx = &contexts[0];
+        assert!(ctx.text.contains("36K"));
+        assert!(ctx.text.contains("•"));
+        assert!(ctx.text.contains("13h ago"));
+        assert!(ctx.text.contains(" • "));
+    }
 }

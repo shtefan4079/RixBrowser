@@ -25,11 +25,15 @@ pub(crate) fn supports_context(tree: &LayoutTree, context: &InlineFormattingCont
         return false;
     }
 
-    let white_space = context
-        .runs
-        .first()
-        .map(|run| run.style.white_space.as_str())
-        .unwrap_or("normal");
+    let white_space = if block.style.white_space.as_str() != "normal" {
+        block.style.white_space.as_str()
+    } else {
+        context
+            .runs
+            .first()
+            .map(|run| run.style.white_space.as_str())
+            .unwrap_or("normal")
+    };
     if context
         .runs
         .iter()
@@ -231,11 +235,15 @@ pub(crate) fn compute_paragraph(
         spans.push(span);
     }
 
-    let white_space = context
-        .runs
-        .first()
-        .map(|run| run.style.white_space.as_str())
-        .unwrap_or("normal");
+    let white_space = if block_style.white_space.as_str() != "normal" {
+        block_style.white_space.as_str()
+    } else {
+        context
+            .runs
+            .first()
+            .map(|run| run.style.white_space.as_str())
+            .unwrap_or("normal")
+    };
     let wrap = !matches!(white_space, "nowrap" | "pre");
     let trailing_space_behavior = match white_space {
         "pre-wrap" => TrailingSpaceBehavior::Hang,

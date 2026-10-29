@@ -314,6 +314,9 @@ impl BrowserShell {
             IpcInputEvent::MouseDown { x, y, button } => {
                 self.route_mouse_down(x, y, button).await;
             }
+            IpcInputEvent::MouseMove { x, y } => {
+                self.route_mouse_move(x, y).await;
+            }
             IpcInputEvent::KeyDown { key, code } => {
                 self.handle_native_key(&key, &code, false, false, false, false)
                     .await;
@@ -424,6 +427,178 @@ impl BrowserShell {
                 }
             }
             self.needs_redraw = true;
+        }
+    }
+
+    pub(super) async fn route_mouse_move(&mut self, x: f32, y: f32) {
+        let hit_chrome_overlay = self.hit_chrome_overlay(x, y);
+        let active_tab_id = self.active_tab_id();
+
+        if !self.is_active_internal() && self.web_surface.contains(x, y) && hit_chrome_overlay.is_none() {
+            let (target, client_x, client_y, scroll_x, scroll_y) = {
+                let Some(page) = self.pages.get(&active_tab_id) else {
+                    return;
+                };
+                let client_x = x - self.web_surface.bounds.x;
+                let client_y = y - self.web_surface.bounds.y;
+                let target = rix_layout::hit_test::hit_test_tree_with_scroll(
+                    &page.layout_tree,
+                    Some(&page.document),
+                    client_x,
+                    client_y,
+                    page.scroll_x,
+                    page.scroll_y,
+                );
+                (target, client_x, client_y, page.scroll_x, page.scroll_y)
+            };
+
+            let new_chain = if let Some(target_node) = target {
+                let page = &self.pages[&active_tab_id];
+                let mut chain = Vec::new();
+                let mut curr = Some(target_node);
+                while let Some(nid) = curr {
+                    chain.push(nid);
+                    curr = page.document.parent(nid);
+                }
+                chain
+            } else {
+                Vec::new()
+            };
+
+            let (old_target, old_chain) = {
+                let page = self.pages.get_mut(&active_tab_id).unwrap();
+                let old_target = page.hovered_node;
+                let old_chain = std::mem::replace(&mut page.hovered_chain, new_chain.clone());
+                page.hovered_node = target;
+                (old_target, old_chain)
+            };
+
+            let page = self.pages.get(&active_tab_id).unwrap();
+            let page_worker = page.page_worker.clone();
+            let page_runtime = page.runtime_context.clone();
+            let doc = &page.document;
+
+            let props = [
+                ("clientX", boa_engine::JsValue::from(client_x as f64)),
+                ("clientY", boa_engine::JsValue::from(client_y as f64)),
+                ("pageX", boa_engine::JsValue::from((client_x + scroll_x) as f64)),
+                ("pageY", boa_engine::JsValue::from((client_y + scroll_y) as f64)),
+                ("button", boa_engine::JsValue::from(0)),
+                ("buttons", boa_engine::JsValue::from(0)),
+                ("pointerId", boa_engine::JsValue::from(1)),
+                ("pointerType", boa_engine::js_string!("mouse").into()),
+            ];
+
+            for &node in &old_chain {
+                if !new_chain.contains(&node) {
+                    if let Some(worker) = &page_worker {
+                        worker.borrow().mouse_event(doc, node, "pointerleave", client_x, client_y, 0);
+                        worker.borrow().mouse_event(doc, node, "mouseleave", client_x, client_y, 0);
+                    }
+                    if let Some(context) = &page_runtime {
+                        if let Ok(mut ctx) = context.try_borrow_mut() {
+                            let _ = dispatch_dom_event_to_js(node, "pointerleave", Some(&props), ctx.runtime.context_mut());
+                            let _ = dispatch_dom_event_to_js(node, "mouseleave", Some(&props), ctx.runtime.context_mut());
+                        }
+                    }
+                }
+            }
+
+            if old_target != target {
+                if let Some(old_node) = old_target {
+                    if let Some(worker) = &page_worker {
+                        worker.borrow().mouse_event(doc, old_node, "pointerout", client_x, client_y, 0);
+                        worker.borrow().mouse_event(doc, old_node, "mouseout", client_x, client_y, 0);
+                    }
+                    if let Some(context) = &page_runtime {
+                        if let Ok(mut ctx) = context.try_borrow_mut() {
+                            let _ = dispatch_dom_event_to_js(old_node, "pointerout", Some(&props), ctx.runtime.context_mut());
+                            let _ = dispatch_dom_event_to_js(old_node, "mouseout", Some(&props), ctx.runtime.context_mut());
+                        }
+                    }
+                }
+                if let Some(target_node) = target {
+                    if let Some(worker) = &page_worker {
+                        worker.borrow().mouse_event(doc, target_node, "pointerover", client_x, client_y, 0);
+                        worker.borrow().mouse_event(doc, target_node, "mouseover", client_x, client_y, 0);
+                    }
+                    if let Some(context) = &page_runtime {
+                        if let Ok(mut ctx) = context.try_borrow_mut() {
+                            let _ = dispatch_dom_event_to_js(target_node, "pointerover", Some(&props), ctx.runtime.context_mut());
+                            let _ = dispatch_dom_event_to_js(target_node, "mouseover", Some(&props), ctx.runtime.context_mut());
+                        }
+                    }
+                }
+            }
+
+            for &node in new_chain.iter().rev() {
+                if !old_chain.contains(&node) {
+                    if let Some(worker) = &page_worker {
+                        worker.borrow().mouse_event(doc, node, "pointerenter", client_x, client_y, 0);
+                        worker.borrow().mouse_event(doc, node, "mouseenter", client_x, client_y, 0);
+                    }
+                    if let Some(context) = &page_runtime {
+                        if let Ok(mut ctx) = context.try_borrow_mut() {
+                            let _ = dispatch_dom_event_to_js(node, "pointerenter", Some(&props), ctx.runtime.context_mut());
+                            let _ = dispatch_dom_event_to_js(node, "mouseenter", Some(&props), ctx.runtime.context_mut());
+                        }
+                    }
+                }
+            }
+
+            if let Some(target_node) = target {
+                if let Some(worker) = &page_worker {
+                    worker.borrow().mouse_event(doc, target_node, "pointermove", client_x, client_y, 0);
+                    worker.borrow().mouse_event(doc, target_node, "mousemove", client_x, client_y, 0);
+                }
+                if let Some(context) = &page_runtime {
+                    if let Ok(mut ctx) = context.try_borrow_mut() {
+                        let _ = dispatch_dom_event_to_js(target_node, "pointermove", Some(&props), ctx.runtime.context_mut());
+                        let _ = dispatch_dom_event_to_js(target_node, "mousemove", Some(&props), ctx.runtime.context_mut());
+                    }
+                }
+            }
+
+            let event = IpcInputEvent::MouseMove { x, y };
+            self.forward_input_to_active_tab(&event).await;
+        } else if let Some(page) = self.pages.get_mut(&active_tab_id) {
+            let old_chain = std::mem::take(&mut page.hovered_chain);
+            let old_target = page.hovered_node.take();
+            let page_worker = page.page_worker.clone();
+            let page_runtime = page.runtime_context.clone();
+            let doc = &page.document;
+
+            let props = [
+                ("clientX", boa_engine::JsValue::from(-10000.0)),
+                ("clientY", boa_engine::JsValue::from(-10000.0)),
+                ("button", boa_engine::JsValue::from(0)),
+                ("buttons", boa_engine::JsValue::from(0)),
+            ];
+
+            for &node in &old_chain {
+                if let Some(worker) = &page_worker {
+                    worker.borrow().mouse_event(doc, node, "pointerleave", -10000.0, -10000.0, 0);
+                    worker.borrow().mouse_event(doc, node, "mouseleave", -10000.0, -10000.0, 0);
+                }
+                if let Some(context) = &page_runtime {
+                    if let Ok(mut ctx) = context.try_borrow_mut() {
+                        let _ = dispatch_dom_event_to_js(node, "pointerleave", Some(&props), ctx.runtime.context_mut());
+                        let _ = dispatch_dom_event_to_js(node, "mouseleave", Some(&props), ctx.runtime.context_mut());
+                    }
+                }
+            }
+            if let Some(old_node) = old_target {
+                if let Some(worker) = &page_worker {
+                    worker.borrow().mouse_event(doc, old_node, "pointerout", -10000.0, -10000.0, 0);
+                    worker.borrow().mouse_event(doc, old_node, "mouseout", -10000.0, -10000.0, 0);
+                }
+                if let Some(context) = &page_runtime {
+                    if let Ok(mut ctx) = context.try_borrow_mut() {
+                        let _ = dispatch_dom_event_to_js(old_node, "pointerout", Some(&props), ctx.runtime.context_mut());
+                        let _ = dispatch_dom_event_to_js(old_node, "mouseout", Some(&props), ctx.runtime.context_mut());
+                    }
+                }
+            }
         }
     }
 
@@ -671,7 +846,6 @@ impl BrowserShell {
                                 .page_worker
                                 .as_ref()
                                 .map_or(0, |worker| worker.borrow().focus_epoch()),
-                            generation: page.image_generation,
                         },
                     );
                 } else if self.pages.get(&tab_id).is_some_and(|page| {
@@ -1339,5 +1513,104 @@ mod tests {
 
         let is_hidden: bool = shell.runtime.evaluate("document.getElementById('more-menu').hasAttribute('hidden')").unwrap().to_boolean();
         assert!(is_hidden);
+    }
+
+    #[tokio::test]
+    async fn test_mouse_move_and_hover_pipeline() {
+        let mut shell = BrowserShell::new_with_customization(
+            1280.0,
+            800.0,
+            crate::customization::CustomizationManager::load_or_default(),
+        ).unwrap();
+        shell.recompute_layout().unwrap();
+
+        let tab_id = shell.priv_state.borrow().active_tab_id;
+        {
+            let mut host = shell.priv_state.borrow_mut();
+            if let Some(tab) = host.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                tab.url = "https://example.com".to_string();
+            }
+        }
+        let html = r#"<!DOCTYPE html>
+        <html>
+            <head>
+                <style>
+                    #box { width: 200px; height: 100px; background: red; }
+                </style>
+            </head>
+            <body>
+                <div id="box"></div>
+            </body>
+        </html>"#;
+
+        let mut page = shell.build_page_from_html("https://example.com", html);
+        page.layout_viewport = (1000.0, 700.0);
+        page.layout_tree = crate::page_style::compute_page_layout(
+            &page.document,
+            &page.url,
+            &page.external_stylesheets,
+            1000.0,
+            700.0,
+            &shell.font_database,
+        );
+
+        let parsed_origin = RixUrl::parse(&page.url).ok();
+        let mut page_config = rix_js::runtime::JsRuntimeConfig::default();
+        page_config.origin = parsed_origin.as_ref().map(|url| url.as_str().to_string());
+        let mut page_runtime = rix_js::runtime::JsRuntime::new(page_config);
+        let page_web_state = Rc::new(RefCell::new(rix_js::web_api::WebApiState::new(parsed_origin)));
+        let _ = rix_js::web_api::register_web_apis(page_runtime.context_mut(), page_web_state.clone());
+        let page_dom_state = Rc::new(RefCell::new(rix_js::dom_bridge::DomBridgeState::new(
+            page.document.clone(),
+        )));
+        let _ = rix_js::dom_bridge::register_dom_bridge(page_runtime.context_mut(), page_dom_state.clone());
+        let page_event_loop = rix_js::web_api::EventLoop::new(page_web_state.clone());
+
+        let runtime = Rc::new(RefCell::new(PageRuntimeContext {
+            runtime: page_runtime,
+            web_state: page_web_state,
+            dom_state: page_dom_state,
+            event_loop: page_event_loop,
+        }));
+        page.runtime_context = Some(runtime.clone());
+
+        shell.pages.insert(tab_id, page);
+
+        // Set up JS event listeners tracking events
+        {
+            let mut ctx = runtime.borrow_mut();
+            ctx.runtime.evaluate(r#"
+                globalThis.eventsFired = [];
+                const b = document.getElementById('box');
+                ['mouseenter', 'mouseleave', 'mouseover', 'mouseout', 'mousemove', 'pointerenter', 'pointerleave', 'pointerover', 'pointerout', 'pointermove'].forEach(evt => {
+                    b.addEventListener(evt, () => {
+                        globalThis.eventsFired.push(evt);
+                    });
+                });
+            "#).unwrap();
+        }
+
+        // Mouse moves into the box (offset by web_surface bounds)
+        let sx = shell.web_surface.bounds.x + 50.0;
+        let sy = shell.web_surface.bounds.y + 50.0;
+        shell.handle_input(IpcInputEvent::MouseMove { x: sx, y: sy }).await.unwrap();
+
+        {
+            let mut ctx = runtime.borrow_mut();
+            let fired = ctx.runtime.evaluate("globalThis.eventsFired.join(',')").unwrap().to_string(ctx.runtime.context_mut()).unwrap().to_std_string_escaped();
+            assert!(fired.contains("mouseenter"), "fired: {}", fired);
+            assert!(fired.contains("pointerenter"), "fired: {}", fired);
+            assert!(fired.contains("mousemove"), "fired: {}", fired);
+        }
+
+        // Mouse moves outside the web surface
+        shell.handle_input(IpcInputEvent::MouseMove { x: -100.0, y: -100.0 }).await.unwrap();
+
+        {
+            let mut ctx = runtime.borrow_mut();
+            let fired = ctx.runtime.evaluate("globalThis.eventsFired.join(',')").unwrap().to_string(ctx.runtime.context_mut()).unwrap().to_std_string_escaped();
+            assert!(fired.contains("mouseleave"), "fired: {}", fired);
+            assert!(fired.contains("pointerleave"), "fired: {}", fired);
+        }
     }
 }

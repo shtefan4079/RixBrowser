@@ -273,6 +273,19 @@ pub(super) async fn load_navigation_content_progressive(
     let navigation_clock = Some((response.navigation_timing, response.navigation_started));
     let final_url = response.final_url.as_str().to_string();
     let status_message = format!("HTTP {}", response.status);
+    if std::env::var_os("RIX_WORKER_TRACE").is_some() {
+        eprintln!(
+            "[rix-document-timing] status={} body_bytes={} fetch_start={:.1}ms request_start={:.1}ms response_start(TTFB)={:.1}ms response_end={:.1}ms total={:.1}ms url={}",
+            response.status,
+            response.body.len(),
+            response.navigation_timing.fetch_start_ms,
+            response.navigation_timing.request_start_ms,
+            response.navigation_timing.response_start_ms,
+            response.navigation_timing.response_end_ms,
+            document_started.elapsed().as_secs_f64() * 1000.0,
+            final_url
+        );
+    }
     if response.body.len() > policy.max_document_bytes {
         let error = format!(
             "Document is larger than the {} MiB limit",
@@ -288,7 +301,16 @@ pub(super) async fn load_navigation_content_progressive(
     }
     let html = String::from_utf8(response.body)
         .unwrap_or_else(|e| String::from_utf8_lossy(&e.into_bytes()).into_owned());
+    let t_parse = std::time::Instant::now();
     let mut document = parse_html(&html);
+    let parse_ms = t_parse.elapsed().as_secs_f64() * 1000.0;
+    if std::env::var_os("RIX_WORKER_TRACE").is_some() {
+        eprintln!(
+            "[rix-html-parse] parse_html took {:.2}ms (nodes={})",
+            parse_ms,
+            document.node_count()
+        );
+    }
     if final_url.contains("youtube.com") || final_url.contains("youtu.be") {
         if let Some(html_id) = document.document_element() {
             if let Some(NodeData::Element(elem)) = document.get_mut(html_id) {

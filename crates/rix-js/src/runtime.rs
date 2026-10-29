@@ -1448,4 +1448,303 @@ mod tests {
         rix_css::set_preferred_color_scheme(rix_css::ColorScheme::Dark);
         rix_css::clear_media_query_cache();
     }
+
+    #[test]
+    fn test_named_node_map_iteration_and_xhr() {
+        use crate::dom_bridge::{register_dom_bridge, DomBridgeState};
+        use rix_dom::Document;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut runtime = JsRuntime::new_for_tab("https://example.com");
+        let doc = Rc::new(RefCell::new(Document::new()));
+        let dom_state = Rc::new(RefCell::new(DomBridgeState::with_shared_document(doc)));
+        register_dom_bridge(runtime.context_mut(), dom_state).expect("dom bridge registered");
+
+        let code = r#"
+            const div = document.createElement('div');
+            div.setAttribute('id', 'test-id');
+            div.setAttribute('class', 'alpha beta');
+            div.setAttribute('data-prop', 'val');
+
+            const spreadAttrs = [...div.attributes].map(a => a.name + '=' + a.value);
+            const forOfAttrs = [];
+            for (const attr of div.attributes) {
+                forOfAttrs.push(attr.name + '=' + attr.value);
+            }
+
+            const forEachAttrs = [];
+            div.attributes.forEach((attr, idx) => {
+                forEachAttrs.push(idx + ':' + attr.name);
+            });
+
+            const xhrDefined = typeof globalThis.XMLHttpRequest === 'function';
+            const xhr = new XMLHttpRequest();
+            const xhrTarget = typeof globalThis.XMLHttpRequestEventTarget === 'function';
+
+            ({
+                spreadCount: spreadAttrs.length,
+                spreadAttrs,
+                forOfCount: forOfAttrs.length,
+                forEachCount: forEachAttrs.length,
+                xhrDefined,
+                xhrTarget,
+                xhrReadyState: xhr.readyState,
+            })
+        "#;
+        let res = runtime.evaluate(code).unwrap();
+        let obj = res.as_object().unwrap();
+
+        let spread_count = obj.get(boa_engine::js_string!("spreadCount"), runtime.context_mut()).unwrap().to_number(runtime.context_mut()).unwrap() as usize;
+        assert_eq!(spread_count, 3);
+
+        let for_of_count = obj.get(boa_engine::js_string!("forOfCount"), runtime.context_mut()).unwrap().to_number(runtime.context_mut()).unwrap() as usize;
+        assert_eq!(for_of_count, 3);
+
+        let for_each_count = obj.get(boa_engine::js_string!("forEachCount"), runtime.context_mut()).unwrap().to_number(runtime.context_mut()).unwrap() as usize;
+        assert_eq!(for_each_count, 3);
+
+        let xhr_defined = obj.get(boa_engine::js_string!("xhrDefined"), runtime.context_mut()).unwrap().to_boolean();
+        assert!(xhr_defined);
+
+        let xhr_target = obj.get(boa_engine::js_string!("xhrTarget"), runtime.context_mut()).unwrap().to_boolean();
+        assert!(xhr_target);
+
+        let xhr_ready_state = obj.get(boa_engine::js_string!("xhrReadyState"), runtime.context_mut()).unwrap().to_number(runtime.context_mut()).unwrap() as u32;
+        assert_eq!(xhr_ready_state, 0);
+    }
+
+    #[test]
+    fn test_intersection_observer_delivery_on_image() {
+        use crate::dom_bridge::{
+            register_dom_bridge, register_layout_api, run_layout_observers, DomBridgeState,
+            LayoutHost, LayoutSnapshot,
+        };
+        use rix_dom::Document;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct DynamicLayoutHost {
+            has_box: std::cell::Cell<bool>,
+        }
+        impl LayoutHost for DynamicLayoutHost {
+            fn layout(&self, document: &Document) -> Option<Rc<LayoutSnapshot>> {
+                use rix_layout::tree::LayoutBoxId;
+                use rix_layout::{
+                    AnonymousBoxType, BoxDimensions, LayoutBoxData, LayoutTree, Rect,
+                };
+                let mut tree = LayoutTree::new();
+                if self.has_box.get() {
+                    for node in document.descendants(document.root()) {
+                        if let Some(rix_dom::NodeData::Element(el)) = document.get(node) {
+                            if el.name.local.as_str() == "img" {
+                                let box_data = LayoutBoxData {
+                                    id: LayoutBoxId(0),
+                                    dom_node: Some(node),
+                                    style: rix_css::ComputedStyle::default(),
+                                    box_type: AnonymousBoxType::None,
+                                    dimensions: BoxDimensions {
+                                        content: Rect::new(50.0, 50.0, 400.0, 200.0),
+                                        ..Default::default()
+                                    },
+                                    text_layout: None,
+                                    inline_fragments: Vec::new(),
+                                    is_replaced: false,
+                                    is_svg: false,
+                                    intrinsic_size: None,
+                                    intrinsic_ratio: None,
+                                    parent: None,
+                                    children: Vec::new(),
+                                };
+                                tree.push(box_data);
+                            }
+                        }
+                    }
+                }
+                Some(Rc::new(LayoutSnapshot::new(tree)))
+            }
+            fn computed_style_for_node(
+                &self,
+                _document: &Document,
+                _node: rix_dom::NodeId,
+            ) -> Option<rix_css::ComputedStyle> {
+                Some(rix_css::ComputedStyle::default())
+            }
+            fn viewport_size(&self) -> (f32, f32) {
+                (1280.0, 800.0)
+            }
+            fn scroll_position(&self) -> (f32, f32) {
+                (0.0, 0.0)
+            }
+            fn request_scroll_position(&self, _x: f32, _y: f32) {}
+        }
+
+        let mut runtime = JsRuntime::new(JsRuntimeConfig::default());
+        let doc = Rc::new(RefCell::new(Document::new()));
+        let dom_state = Rc::new(RefCell::new(DomBridgeState::with_shared_document(doc.clone())));
+        register_dom_bridge(runtime.context_mut(), dom_state).expect("dom bridge registered");
+        let layout_host = Rc::new(DynamicLayoutHost {
+            has_box: std::cell::Cell::new(false),
+        });
+        register_layout_api(runtime.context_mut(), layout_host.clone()).expect("layout api registered");
+
+        let code = r#"
+            let entered = false;
+            let entryHeight = 0;
+            let callCount = 0;
+            let lastEntry = null;
+            const html = document.createElement('html');
+            const body = document.createElement('body');
+            document.appendChild(html);
+            html.appendChild(body);
+            const img = document.createElement('img');
+            body.appendChild(img);
+
+            const observer = new IntersectionObserver((entries, obs) => {
+                callCount += entries.length;
+                for (const entry of entries) {
+                    entryHeight = entry.intersectionRect.height;
+                    lastEntry = {
+                        isIntersecting: entry.isIntersecting,
+                        intersectionRatio: entry.intersectionRatio,
+                        boundingClientRect: {
+                            x: entry.boundingClientRect.x,
+                            y: entry.boundingClientRect.y,
+                            width: entry.boundingClientRect.width,
+                            height: entry.boundingClientRect.height,
+                        },
+                        intersectionRect: {
+                            x: entry.intersectionRect.x,
+                            y: entry.intersectionRect.y,
+                            width: entry.intersectionRect.width,
+                            height: entry.intersectionRect.height,
+                        },
+                        rootBounds: {
+                            x: entry.rootBounds.x,
+                            y: entry.rootBounds.y,
+                            width: entry.rootBounds.width,
+                            height: entry.rootBounds.height,
+                        },
+                    };
+                    if (entry.intersectionRect.height > 0) {
+                        entered = true;
+                    }
+                }
+            }, { rootMargin: '10%', threshold: 0.01 });
+
+            observer.observe(img);
+            globalThis.__test_state = () => ({
+                entered,
+                entryHeight,
+                callCount,
+                lastEntry: JSON.stringify(lastEntry),
+                hasRatio: "intersectionRatio" in IntersectionObserverEntry.prototype
+            });
+        "#;
+        runtime.evaluate(code).unwrap();
+        // Phase 1: no layout box yet
+        run_layout_observers(runtime.context_mut()).unwrap();
+        let res1 = runtime.evaluate("globalThis.__test_state()").unwrap();
+        let obj1 = res1.as_object().unwrap();
+        let entered1 = obj1.get(boa_engine::js_string!("entered"), runtime.context_mut()).unwrap().to_boolean();
+        assert!(!entered1, "entered must be false initially when no box exists");
+
+        // Phase 2: layout box is computed
+        layout_host.has_box.set(true);
+        // bump document revision so observers notice the layout update
+        doc.borrow_mut().bump_revision();
+        run_layout_observers(runtime.context_mut()).unwrap();
+        let res2 = runtime.evaluate("globalThis.__test_state()").unwrap();
+        let obj2 = res2.as_object().unwrap();
+        let entered2 = obj2.get(boa_engine::js_string!("entered"), runtime.context_mut()).unwrap().to_boolean();
+        let entry_height2 = obj2.get(boa_engine::js_string!("entryHeight"), runtime.context_mut()).unwrap().to_number(runtime.context_mut()).unwrap();
+        let call_count2 = obj2.get(boa_engine::js_string!("callCount"), runtime.context_mut()).unwrap().to_number(runtime.context_mut()).unwrap();
+        assert!(entered2, "entered must be true after layout box is computed! callCount={}, entryHeight={}", call_count2, entry_height2);
+        assert_eq!(entry_height2, 200.0);
+    }
+
+    #[test]
+    fn test_html_image_load_event_and_dimensions() {
+        use crate::dom_bridge::{
+            register_dom_bridge, register_layout_api, DomBridgeState, ImageLoadState, LayoutHost,
+            LayoutSnapshot,
+        };
+        use rix_dom::Document;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct ImageTestLayoutHost;
+        impl LayoutHost for ImageTestLayoutHost {
+            fn layout(&self, _document: &Document) -> Option<Rc<LayoutSnapshot>> {
+                Some(Rc::new(LayoutSnapshot::empty()))
+            }
+            fn viewport_size(&self) -> (f32, f32) {
+                (800.0, 600.0)
+            }
+            fn scroll_position(&self) -> (f32, f32) {
+                (0.0, 0.0)
+            }
+            fn request_scroll_position(&self, _x: f32, _y: f32) {}
+            fn image_load_state(&self, url: &str) -> ImageLoadState {
+                if url == "https://example.com/test.jpg" {
+                    ImageLoadState::Loaded {
+                        width: 320.0,
+                        height: 180.0,
+                    }
+                } else {
+                    ImageLoadState::Pending
+                }
+            }
+        }
+
+        let mut runtime = JsRuntime::new(JsRuntimeConfig::default());
+        let doc = Rc::new(RefCell::new(Document::new()));
+        let dom_state = Rc::new(RefCell::new(DomBridgeState::with_shared_document(doc.clone())));
+        register_dom_bridge(runtime.context_mut(), dom_state).expect("dom bridge registered");
+        register_layout_api(runtime.context_mut(), Rc::new(ImageTestLayoutHost)).unwrap();
+
+        let code = r#"
+            const html = document.createElement('html');
+            const body = document.createElement('body');
+            document.appendChild(html);
+            html.appendChild(body);
+            const img = document.createElement('img');
+            body.appendChild(img);
+            let loaded = false;
+            img.onload = () => { loaded = true; };
+            img.src = 'https://example.com/test.jpg';
+            globalThis.__img_state = () => ({
+                complete: img.complete,
+                naturalWidth: img.naturalWidth,
+                naturalHeight: img.naturalHeight,
+                loaded: loaded
+            });
+        "#;
+        runtime.evaluate(code).unwrap();
+        let res = runtime.evaluate("globalThis.__img_state()").unwrap();
+        let obj = res.as_object().unwrap();
+        let complete = obj
+            .get(boa_engine::js_string!("complete"), runtime.context_mut())
+            .unwrap()
+            .to_boolean();
+        let natural_width = obj
+            .get(boa_engine::js_string!("naturalWidth"), runtime.context_mut())
+            .unwrap()
+            .to_number(runtime.context_mut())
+            .unwrap();
+        let natural_height = obj
+            .get(boa_engine::js_string!("naturalHeight"), runtime.context_mut())
+            .unwrap()
+            .to_number(runtime.context_mut())
+            .unwrap();
+        let loaded = obj
+            .get(boa_engine::js_string!("loaded"), runtime.context_mut())
+            .unwrap()
+            .to_boolean();
+
+        assert!(complete);
+        assert_eq!(natural_width, 320.0);
+        assert_eq!(natural_height, 180.0);
+        assert!(loaded);
+    }
 }

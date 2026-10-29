@@ -108,7 +108,13 @@ pub(super) fn translate_page_display_list(
     use rix_render::display_list::DrawCommand;
 
     let mut translated = DisplayList::new();
-    translated.push(DrawCommand::PushClip { rect: bounds }, i32::MIN);
+    translated.push(
+        DrawCommand::PushClip {
+            rect: bounds,
+            corner_radii: [0.0; 4],
+        },
+        i32::MIN,
+    );
     let scrolled_x = bounds.x - scroll_x;
     let scrolled_y = bounds.y - scroll_y;
     for item in &source.items {
@@ -150,12 +156,14 @@ pub(super) fn translate_page_display_list(
                 width,
                 border_radius,
                 corner_radii,
+                widths,
             } => DrawCommand::DrawBorder {
                 rect: translated_rect(*rect, offset_x, offset_y),
                 color: *color,
                 width: *width,
                 border_radius: *border_radius,
                 corner_radii: *corner_radii,
+                widths: *widths,
             },
             DrawCommand::DrawText {
                 text,
@@ -237,8 +245,9 @@ pub(super) fn translate_page_display_list(
                 border_radius: *border_radius,
                 object_fit: *object_fit,
             },
-            DrawCommand::PushClip { rect } => DrawCommand::PushClip {
+            DrawCommand::PushClip { rect, corner_radii } => DrawCommand::PushClip {
                 rect: translated_rect(*rect, offset_x, offset_y),
+                corner_radii: *corner_radii,
             },
             DrawCommand::PopClip => DrawCommand::PopClip,
             DrawCommand::PushOpacity { opacity } => DrawCommand::PushOpacity { opacity: *opacity },

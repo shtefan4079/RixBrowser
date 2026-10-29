@@ -233,7 +233,13 @@ impl WebSurface {
 
     pub fn build_surface_display_list(&self) -> DisplayList {
         let mut list = DisplayList::new();
-        list.push(DrawCommand::PushClip { rect: self.bounds }, i32::MIN);
+        list.push(
+            DrawCommand::PushClip {
+                rect: self.bounds,
+                corner_radii: [0.0; 4],
+            },
+            i32::MIN,
+        );
         list.push(
             DrawCommand::DrawRect {
                 rect: self.bounds,

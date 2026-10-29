@@ -220,14 +220,18 @@ fn image_src_get(this: &JsValue, _args: &[JsValue], context: &mut Context) -> Js
 }
 
 fn image_src_set(this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
-    image_node(this, context)?;
+    let node = image_node(this, context)?;
     let value = args
         .get_or_undefined(0)
         .to_string(context)?
         .to_std_string_escaped();
-    element_set_attribute(
+    let res = element_set_attribute(
         this,
         &[js_string!("src").into(), js_string!(value).into()],
         context,
-    )
+    )?;
+    if let Ok(ImageLoadState::Loaded { .. }) = image_request_state(node, context) {
+        let _ = super::events::dispatch_dom_event_to_js(node, "load", None, context);
+    }
+    Ok(res)
 }

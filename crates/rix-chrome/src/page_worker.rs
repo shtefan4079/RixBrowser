@@ -441,6 +441,14 @@ pub struct WorkerCommand {
     pub arguments: Vec<String>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct MouseInput {
+    pub client_x: f32,
+    pub client_y: f32,
+    pub button: u8,
+    pub buttons: u16,
+}
+
 #[derive(Serialize, Deserialize)]
 enum Request {
     Focus {
@@ -474,6 +482,8 @@ enum Request {
         event: String,
         keyboard: Option<KeyboardInput>,
         value: Option<String>,
+        #[serde(default)]
+        mouse: Option<MouseInput>,
     },
     ScriptLoadResult {
         target: NodeToken,
@@ -975,6 +985,40 @@ impl PageWorker {
                     ..Default::default()
                 }),
                 value,
+                mouse: None,
+            })
+            .ok()?;
+        Some(id)
+    }
+
+    pub fn mouse_event(
+        &self,
+        doc: &Document,
+        node: NodeId,
+        event: &str,
+        client_x: f32,
+        client_y: f32,
+        button: u8,
+    ) -> Option<u64> {
+        if self.stopped || !self.flush_focus() {
+            return None;
+        }
+        let target = self.node_token(doc, node)?;
+        let id = self.next_event.get();
+        self.next_event.set(id.wrapping_add(1));
+        self.requests
+            .try_send(Request::Event {
+                id,
+                target,
+                event: event.to_string(),
+                keyboard: None,
+                value: None,
+                mouse: Some(MouseInput {
+                    client_x,
+                    client_y,
+                    button,
+                    buttons: if button == 0 { 0 } else { 1 << (button - 1) },
+                }),
             })
             .ok()?;
         Some(id)
@@ -1094,6 +1138,7 @@ impl PageWorker {
                 event: "keydown".into(),
                 keyboard: Some(keyboard),
                 value: None,
+                mouse: None,
             })
             .ok()?;
         Some(id)
@@ -1874,7 +1919,7 @@ fn evaluate_page_script(
             promise_jobs_ms,
         },
     })?;
-    if std::env::var_os("RIX_WORKER_TRACE").is_some() && evaluation_timing.total_ms > 50.0 {
+    if std::env::var_os("RIX_WORKER_TRACE").is_some() {
         eprintln!(
             "[rix-script-timing] eval={:.1}ms parse={:.1}ms compile={:.1}ms exec={:.1}ms promise_jobs={:.1}ms url={}",
             evaluation_timing.total_ms,
@@ -2011,6 +2056,17 @@ fn evaluate_page_module(
             promise_jobs_ms,
         },
     })?;
+    if std::env::var_os("RIX_WORKER_TRACE").is_some() {
+        eprintln!(
+            "[rix-script-timing] module eval={:.1}ms parse={:.1}ms compile={:.1}ms exec={:.1}ms promise_jobs={:.1}ms url={}",
+            total_started.elapsed().as_secs_f64() * 1000.0,
+            parse_ms,
+            compile_ms,
+            execute_ms,
+            promise_jobs_ms,
+            diagnostic_url
+        );
+    }
     flush_console_messages(runtime, diagnostics)?;
     Ok(())
 }
@@ -3037,6 +3093,7 @@ fn run_worker_runtime() -> Result<(), String> {
                 event,
                 keyboard,
                 value,
+                mouse,
             }) => {
                 send(Update::Busy)?;
                 send(Update::TaskStarted {
@@ -3071,7 +3128,7 @@ fn run_worker_runtime() -> Result<(), String> {
                             .borrow_mut()
                             .set_focused(Some(node), true);
                     }
-                    let props = keyboard.as_ref().map(|input| {
+                    let props = if let Some(input) = keyboard.as_ref() {
                         let mut props = vec![
                             ("key", boa_engine::js_string!(input.key.as_str()).into()),
                             ("code", boa_engine::js_string!(input.code.as_str()).into()),
@@ -3091,8 +3148,21 @@ fn run_worker_runtime() -> Result<(), String> {
                             props.push(("charCode", boa_engine::JsValue::new(char_code)));
                             props.push(("which", boa_engine::JsValue::new(which)));
                         }
-                        props
-                    });
+                        Some(props)
+                    } else if let Some(mouse) = mouse.as_ref() {
+                        Some(vec![
+                            ("clientX", boa_engine::JsValue::from(mouse.client_x as f64)),
+                            ("clientY", boa_engine::JsValue::from(mouse.client_y as f64)),
+                            ("pageX", boa_engine::JsValue::from(mouse.client_x as f64)),
+                            ("pageY", boa_engine::JsValue::from(mouse.client_y as f64)),
+                            ("button", boa_engine::JsValue::from(mouse.button)),
+                            ("buttons", boa_engine::JsValue::from(mouse.buttons)),
+                            ("pointerId", boa_engine::JsValue::from(1)),
+                            ("pointerType", boa_engine::js_string!("mouse").into()),
+                        ])
+                    } else {
+                        None
+                    };
                     allowed =
                         match dispatch_page_event(node, &event, props.as_deref(), &mut runtime) {
                             Ok(result) => result.to_boolean(),
@@ -3185,6 +3255,12 @@ fn run_worker_runtime() -> Result<(), String> {
             }
             Ok(Request::Layout(change)) => {
                 let is_viewport = matches!(change, LayoutChange::Viewport { .. });
+                let image_change = match &change {
+                    LayoutChange::ImageSize { url, width, height } => {
+                        Some((url.clone(), *width, *height))
+                    }
+                    _ => None,
+                };
                 apply_layout_change(&layout_host, change);
                 if is_viewport {
                     {
@@ -3196,12 +3272,55 @@ fn run_worker_runtime() -> Result<(), String> {
                     let _ = runtime.evaluate("if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') window.dispatchEvent(new Event('resize'));");
                     let _ = rix_js::dom_bridge::notify_match_media(runtime.context_mut());
                 }
+                if let Some((ref image_url, _width, _height)) = image_change {
+                    let doc_rc = state.borrow().document.clone();
+                    let matching_nodes: Vec<NodeId> = {
+                        let doc = doc_rc.borrow();
+                        let base = document_base_url(&doc, &url);
+                        let mut candidates: Vec<NodeId> = doc.descendants_with_shadow_roots(doc.root());
+                        let bridge = state.borrow();
+                        for &node in bridge.element_wrappers.keys() {
+                            if !candidates.contains(&node) {
+                                candidates.push(node);
+                            }
+                        }
+                        candidates
+                            .into_iter()
+                            .filter(|&node| {
+                                if let Some(NodeData::Element(elem)) = doc.get(node) {
+                                    if elem.name.local.as_str() == "img" {
+                                        if let Some(src) = rix_dom::select_image_source(
+                                            elem.get_attribute("src"),
+                                            elem.get_attribute("srcset"),
+                                        ) {
+                                            if let Some((resolved, _)) = resolve_external_resource(&base, src) {
+                                                return resolved == *image_url;
+                                            }
+                                        }
+                                    }
+                                }
+                                false
+                            })
+                            .collect()
+                    };
+                    for node in matching_nodes {
+                        let _ = dispatch_dom_event_to_js(node, "load", None, runtime.context_mut());
+                    }
+                    let _ = runtime.context_mut().run_jobs();
+                    {
+                        let mut doc = doc_rc.borrow_mut();
+                        doc.bump_style_revision();
+                        doc.bump_revision();
+                    }
+                }
                 send(Update::Busy)?;
                 send(Update::TaskStarted {
                     label: if layout_host.has_pending_scroll_event() {
                         "layout scroll event dispatch".into()
                     } else if is_viewport {
                         "layout viewport resize".into()
+                    } else if image_change.is_some() {
+                        "layout image load dispatch".into()
                     } else {
                         "layout observer checkpoint".into()
                     },
@@ -3325,6 +3444,12 @@ fn run_worker_runtime() -> Result<(), String> {
         )?;
         flush_console_messages(&mut runtime, &mut console_diagnostics)?;
         flush_scroll_request(&layout_host)?;
+        if let Err(error) = rix_js::dom_bridge::run_layout_observers(runtime.context_mut()) {
+            send(Update::Error {
+                message: error.to_string(),
+            })?;
+        }
+        let _ = runtime.context_mut().run_jobs();
         let has_immediate_work = events.has_pending_microtasks()
             || events
                 .next_deadline()

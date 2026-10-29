@@ -507,6 +507,7 @@ pub(super) fn register_attribute_interfaces(context: &mut Context) -> JsResult<(
                         return Reflect.deleteProperty(target, key);
                     },
                 });
+                mapOwners.set(target, element);
                 mapOwners.set(map, element);
                 return map;
             }
@@ -573,6 +574,58 @@ pub(super) fn register_attribute_interfaces(context: &mut Context) -> JsResult<(
             NamedNodeMap.prototype.removeNamedItem = function(name) { return removeNamedItem(this, name, false, null); };
             NamedNodeMap.prototype.removeNamedItemNS = function(namespaceURI, localName) {
                 return removeNamedItem(this, localName, true, namespaceOrNull(namespaceURI));
+            };
+            NamedNodeMap.prototype[Symbol.iterator] = function iterator() {
+                const element = mapOwner(this);
+                const current = records(element);
+                let index = 0;
+                return {
+                    next() {
+                        if (index < current.length) {
+                            return { value: attrFromRecord(element, current[index++]), done: false };
+                        }
+                        return { value: undefined, done: true };
+                    },
+                    [Symbol.iterator]() { return this; },
+                };
+            };
+            NamedNodeMap.prototype.values = NamedNodeMap.prototype[Symbol.iterator];
+            NamedNodeMap.prototype.entries = function entries() {
+                const element = mapOwner(this);
+                const current = records(element);
+                let index = 0;
+                return {
+                    next() {
+                        if (index < current.length) {
+                            const pos = index++;
+                            return { value: [pos, attrFromRecord(element, current[pos])], done: false };
+                        }
+                        return { value: undefined, done: true };
+                    },
+                    [Symbol.iterator]() { return this; },
+                };
+            };
+            NamedNodeMap.prototype.keys = function keys() {
+                const element = mapOwner(this);
+                const current = records(element);
+                let index = 0;
+                return {
+                    next() {
+                        if (index < current.length) {
+                            return { value: index++, done: false };
+                        }
+                        return { value: undefined, done: true };
+                    },
+                    [Symbol.iterator]() { return this; },
+                };
+            };
+            NamedNodeMap.prototype.forEach = function forEach(callback, thisArg) {
+                const element = mapOwner(this);
+                if (typeof callback !== 'function') throw new TypeError('NamedNodeMap.forEach requires a callback');
+                const current = records(element);
+                for (let i = 0; i < current.length; i++) {
+                    callback.call(thisArg, attrFromRecord(element, current[i]), i, this);
+                }
             };
 
             Object.defineProperty(Element.prototype, 'attributes', {

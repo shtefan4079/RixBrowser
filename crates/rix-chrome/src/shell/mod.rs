@@ -262,6 +262,8 @@ pub struct PageContent {
     pub node_count: usize,
     pub scheduled_images_revision: u64,
     pub scheduled_images_scroll_y: f32,
+    pub hovered_node: Option<rix_dom::NodeId>,
+    pub hovered_chain: Vec<rix_dom::NodeId>,
     worker_layout_sync: WorkerLayoutSync,
     worker_animation_frame_requested: bool,
     worker_animation_frame_in_flight: bool,
@@ -362,7 +364,6 @@ struct PendingPageKey {
     input: KeyboardInput,
     target: Option<crate::page_worker::NodeToken>,
     focus_epoch: u64,
-    generation: u64,
 }
 
 impl BrowserShell {

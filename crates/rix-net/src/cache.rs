@@ -120,9 +120,26 @@ impl HttpCacheMeta {
         if let Some(ref lm) = self.last_modified {
             if let Some(lm_sec) = parse_http_date(lm) {
                 let diff = self.fetched_at.saturating_sub(lm_sec);
-                
                 return (diff / 10).min(7 * 86400);
             }
+        }
+        // RFC 9111 §4.2.2: Heuristic freshness for static assets (images, SVGs, fonts, media) or responses with ETag
+        let is_static_asset = self.content_type.starts_with("image/")
+            || self.content_type.starts_with("font/")
+            || self.content_type.contains("svg")
+            || self.url.ends_with(".svg")
+            || self.url.ends_with(".png")
+            || self.url.ends_with(".jpg")
+            || self.url.ends_with(".jpeg")
+            || self.url.ends_with(".webp")
+            || self.url.ends_with(".woff2")
+            || self.url.ends_with(".woff")
+            || self.url.ends_with(".ttf");
+        if is_static_asset {
+            return 86400; // 24 hours default for images/svg/fonts without explicit headers
+        }
+        if self.etag.is_some() {
+            return 3600; // 1 hour for resources with ETag
         }
         0
     }
@@ -564,6 +581,34 @@ mod tests {
         assert_eq!(meta.freshness_lifetime(), 1000);
         assert!(meta.is_fresh(now + 500));
         assert!(!meta.is_fresh(now + 1500));
+    }
+
+    #[test]
+    fn test_heuristic_freshness_for_svg_and_static_assets() {
+        let now = 1_000_000;
+        let svg_meta = HttpCacheMeta {
+            url: "https://www.youtube.com/s/desktop/icons.svg".to_string(),
+            final_url: "https://www.youtube.com/s/desktop/icons.svg".to_string(),
+            status: 200,
+            headers: HashMap::new(),
+            content_type: "image/svg+xml".to_string(),
+            protocol: NegotiatedProtocol::Http11,
+            fetched_at: now,
+            response_date: Some(now),
+            etag: None,
+            last_modified: None,
+            max_age: None,
+            expires: None,
+            immutable: false,
+            must_revalidate: false,
+            no_cache: false,
+            body_len: 2048,
+        };
+
+        assert_eq!(svg_meta.freshness_lifetime(), 86400);
+        assert!(svg_meta.is_fresh(now + 3600));
+        assert!(svg_meta.is_fresh(now + 86399));
+        assert!(!svg_meta.is_fresh(now + 86401));
     }
 
     #[test]

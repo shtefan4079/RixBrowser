@@ -6,12 +6,39 @@ use rix_text::layout::LayoutGlyph;
 use rix_text::shaping::TextShaper;
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use vello::kurbo::{Affine, BezPath, Rect, RoundedRect, RoundedRectRadii, Stroke};
+use vello::kurbo::{Affine, BezPath, Rect, RoundedRect, RoundedRectRadii, Shape, Stroke};
 use vello::peniko::{
     BlendMode, Blob, Color, Fill, FontData as PenikoFontData, Gradient, ImageAlphaType, ImageBrush,
     ImageData as PenikoImageData, ImageFormat, InterpolationAlphaSpace,
 };
 use vello::{Glyph, Scene};
+
+/// Proportionally scales corner radii according to W3C CSS Backgrounds and Borders Level 3 §5.5:
+/// "Corner curves must not overlap: When the sum of any two adjacent border radii
+/// exceeds the size of the border box, UAs must proportionally reduce the used values
+/// of all border radii until none of them overlap."
+#[inline]
+pub(crate) fn scale_corner_radii(width: f64, height: f64, radii: [f32; 4]) -> [f64; 4] {
+    let [tl, tr, br, bl] = radii.map(|r| (r as f64).max(0.0));
+    let mut f = 1.0f64;
+    let top_sum = tl + tr;
+    if top_sum > width && top_sum > 0.0 {
+        f = f.min(width / top_sum);
+    }
+    let bottom_sum = bl + br;
+    if bottom_sum > width && bottom_sum > 0.0 {
+        f = f.min(width / bottom_sum);
+    }
+    let left_sum = tl + bl;
+    if left_sum > height && left_sum > 0.0 {
+        f = f.min(height / left_sum);
+    }
+    let right_sum = tr + br;
+    if right_sum > height && right_sum > 0.0 {
+        f = f.min(height / right_sum);
+    }
+    [tl * f, tr * f, br * f, bl * f]
+}
 
 pub struct VelloSceneBuilder;
 
@@ -56,19 +83,23 @@ impl VelloSceneBuilder {
                     let y0 = rect.y as f64;
                     let x1 = (rect.x + rect.width) as f64;
                     let y1 = (rect.y + rect.height) as f64;
-                    let has_corner_radii = corner_radii.iter().any(|&r| r > 0.0);
-                    if has_corner_radii {
-                        let max_r = (rect.width.min(rect.height) / 2.0) as f64;
-                        let tl = (corner_radii[0] as f64).clamp(0.0, max_r);
-                        let tr = (corner_radii[1] as f64).clamp(0.0, max_r);
-                        let br = (corner_radii[2] as f64).clamp(0.0, max_r);
-                        let bl = (corner_radii[3] as f64).clamp(0.0, max_r);
-                        let rounded = RoundedRect::new(x0, y0, x1, y1, RoundedRectRadii::new(tl, tr, br, bl));
-                        scene.fill(Fill::NonZero, current_transform, fill_color, None, &rounded);
+                    let effective_radii = if corner_radii.iter().any(|&r| r > 0.0) {
+                        *corner_radii
                     } else if *border_radius > 0.0 {
-                        let radius = (*border_radius as f64)
-                            .clamp(0.0, (rect.width.min(rect.height) / 2.0) as f64);
-                        let rounded = RoundedRect::new(x0, y0, x1, y1, radius);
+                        [*border_radius; 4]
+                    } else {
+                        [0.0; 4]
+                    };
+                    if effective_radii.iter().any(|&r| r > 0.0) {
+                        let [tl, tr, br, bl] =
+                            scale_corner_radii(rect.width as f64, rect.height as f64, effective_radii);
+                        let rounded = RoundedRect::new(
+                            x0,
+                            y0,
+                            x1,
+                            y1,
+                            RoundedRectRadii::new(tl, tr, br, bl),
+                        );
                         scene.fill(Fill::NonZero, current_transform, fill_color, None, &rounded);
                     } else {
                         let r = Rect::new(x0, y0, x1, y1);
@@ -212,34 +243,90 @@ impl VelloSceneBuilder {
                     width,
                     border_radius,
                     corner_radii,
+                    widths,
                 } => {
                     if rect.width <= 0.0 || rect.height <= 0.0 || *width <= 0.0 {
                         continue;
                     }
                     let stroke_color = Self::convert_color(*color);
-                    let stroke = Stroke::new(*width as f64);
-                    let x0 = rect.x as f64;
-                    let y0 = rect.y as f64;
-                    let x1 = (rect.x + rect.width) as f64;
-                    let y1 = (rect.y + rect.height) as f64;
-
-                    let has_corner_radii = corner_radii.iter().any(|&r| r > 0.0);
-                    if has_corner_radii {
-                        let max_r = (rect.width.min(rect.height) / 2.0) as f64;
-                        let tl = (corner_radii[0] as f64).clamp(0.0, max_r);
-                        let tr = (corner_radii[1] as f64).clamp(0.0, max_r);
-                        let br = (corner_radii[2] as f64).clamp(0.0, max_r);
-                        let bl = (corner_radii[3] as f64).clamp(0.0, max_r);
-                        let rounded = RoundedRect::new(x0, y0, x1, y1, RoundedRectRadii::new(tl, tr, br, bl));
-                        scene.stroke(&stroke, current_transform, stroke_color, None, &rounded);
+                    let is_uniform_width = widths.iter().all(|&w| (w - widths[0]).abs() < 1e-4);
+                    let effective_radii = if corner_radii.iter().any(|&r| r > 0.0) {
+                        *corner_radii
                     } else if *border_radius > 0.0 {
-                        let radius = (*border_radius as f64)
-                            .clamp(0.0, (rect.width.min(rect.height) / 2.0) as f64);
-                        let rounded = RoundedRect::new(x0, y0, x1, y1, radius);
-                        scene.stroke(&stroke, current_transform, stroke_color, None, &rounded);
+                        [*border_radius; 4]
                     } else {
-                        let r = Rect::new(x0, y0, x1, y1);
-                        scene.stroke(&stroke, current_transform, stroke_color, None, &r);
+                        [0.0; 4]
+                    };
+                    let has_radii = effective_radii.iter().any(|&r| r > 0.0);
+
+                    if is_uniform_width {
+                        let stroke = Stroke::new(*width as f64);
+                        let x0 = rect.x as f64;
+                        let y0 = rect.y as f64;
+                        let x1 = (rect.x + rect.width) as f64;
+                        let y1 = (rect.y + rect.height) as f64;
+
+                        if has_radii {
+                            let [tl, tr, br, bl] = scale_corner_radii(
+                                rect.width as f64,
+                                rect.height as f64,
+                                effective_radii,
+                            );
+                            let rounded = RoundedRect::new(
+                                x0,
+                                y0,
+                                x1,
+                                y1,
+                                RoundedRectRadii::new(tl, tr, br, bl),
+                            );
+                            scene.stroke(&stroke, current_transform, stroke_color, None, &rounded);
+                        } else {
+                            let r = Rect::new(x0, y0, x1, y1);
+                            scene.stroke(&stroke, current_transform, stroke_color, None, &r);
+                        }
+                    } else {
+                        let x0 = rect.x as f64;
+                        let y0 = rect.y as f64;
+                        let x1 = (rect.x + rect.width) as f64;
+                        let y1 = (rect.y + rect.height) as f64;
+                        let [tl, tr, br, bl] = scale_corner_radii(
+                            rect.width as f64,
+                            rect.height as f64,
+                            effective_radii,
+                        );
+                        let outer_rounded = RoundedRect::new(
+                            x0,
+                            y0,
+                            x1,
+                            y1,
+                            RoundedRectRadii::new(tl, tr, br, bl),
+                        );
+
+                        let top_w = widths[0] as f64;
+                        let right_w = widths[1] as f64;
+                        let bottom_w = widths[2] as f64;
+                        let left_w = widths[3] as f64;
+
+                        let in_x0 = x0 + left_w;
+                        let in_y0 = y0 + top_w;
+                        let in_x1 = (x1 - right_w).max(in_x0);
+                        let in_y1 = (y1 - bottom_w).max(in_y0);
+
+                        let in_tl = (tl - top_w.max(left_w)).max(0.0);
+                        let in_tr = (tr - top_w.max(right_w)).max(0.0);
+                        let in_br = (br - bottom_w.max(right_w)).max(0.0);
+                        let in_bl = (bl - bottom_w.max(left_w)).max(0.0);
+                        let inner_rounded = RoundedRect::new(
+                            in_x0,
+                            in_y0,
+                            in_x1,
+                            in_y1,
+                            RoundedRectRadii::new(in_tl, in_tr, in_br, in_bl),
+                        );
+
+                        let mut path = outer_rounded.to_path(0.1);
+                        path.extend(inner_rounded.path_elements(0.1));
+                        scene.fill(Fill::EvenOdd, current_transform, stroke_color, None, &path);
                     }
                 }
                 DrawCommand::DrawText {
@@ -336,20 +423,33 @@ impl VelloSceneBuilder {
                         current_transform,
                     );
                 }
-                DrawCommand::PushClip { rect } => {
+                DrawCommand::PushClip { rect, corner_radii } => {
                     let current = clip_bounds.last().copied();
                     clip_bounds.push(
                         current
                             .map(|parent| intersect_clip_bounds(*rect, parent))
                             .unwrap_or(*rect),
                     );
-                    let clip_rect = Rect::new(
-                        rect.x as f64,
-                        rect.y as f64,
-                        (rect.x + rect.width) as f64,
-                        (rect.y + rect.height) as f64,
-                    );
-                    scene.push_clip_layer(Fill::NonZero, current_transform, &clip_rect);
+                    let x0 = rect.x as f64;
+                    let y0 = rect.y as f64;
+                    let x1 = (rect.x + rect.width) as f64;
+                    let y1 = (rect.y + rect.height) as f64;
+                    let has_radii = corner_radii.iter().any(|&r| r > 0.0);
+                    if has_radii {
+                        let [tl, tr, br, bl] =
+                            scale_corner_radii(rect.width as f64, rect.height as f64, *corner_radii);
+                        let rounded = RoundedRect::new(
+                            x0,
+                            y0,
+                            x1,
+                            y1,
+                            RoundedRectRadii::new(tl, tr, br, bl),
+                        );
+                        scene.push_clip_layer(Fill::NonZero, current_transform, &rounded);
+                    } else {
+                        let clip_rect = Rect::new(x0, y0, x1, y1);
+                        scene.push_clip_layer(Fill::NonZero, current_transform, &clip_rect);
+                    }
                 }
                 DrawCommand::PopClip => {
                     scene.pop_layer();
@@ -762,7 +862,7 @@ fn image_bytes_to_rgba(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
 fn cached_svg_path(d: &str) -> Option<std::sync::Arc<BezPath>> {
     static CACHE: OnceLock<std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<BezPath>>>> =
         OnceLock::new();
-    let cache = CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::with_capacity(256)));
+    let cache = CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::with_capacity(1024)));
     if let Ok(reader) = cache.read() {
         if let Some(path) = reader.get(d) {
             return Some(std::sync::Arc::clone(path));
@@ -770,7 +870,7 @@ fn cached_svg_path(d: &str) -> Option<std::sync::Arc<BezPath>> {
     }
     let parsed = std::sync::Arc::new(svg_path_to_kurbo(d, 0.0, 0.0, 1.0, 1.0)?);
     if let Ok(mut writer) = cache.write() {
-        if writer.len() < 2048 {
+        if writer.len() < 4096 {
             writer.insert(d.to_string(), std::sync::Arc::clone(&parsed));
         }
     }
@@ -1075,6 +1175,7 @@ fn arc_to_kurbo(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VelloRenderer;
 
     #[test]
     fn test_cached_svg_path_dedup() {
@@ -1082,6 +1183,68 @@ mod tests {
         let path1 = cached_svg_path(d).expect("path should parse");
         let path2 = cached_svg_path(d).expect("path should parse from cache");
         assert!(std::sync::Arc::ptr_eq(&path1, &path2), "subsequent lookups must return the same cached Arc");
+    }
+
+    #[test]
+    fn test_rounded_clip_rendering() {
+        let mut list = DisplayList::default();
+        list.push(
+            DrawCommand::PushClip {
+                rect: rix_layout::box_model::Rect::new(20.0, 20.0, 100.0, 100.0),
+                corner_radii: [20.0, 20.0, 20.0, 20.0],
+            },
+            0,
+        );
+        list.push(
+            DrawCommand::DrawRect {
+                rect: rix_layout::box_model::Rect::new(20.0, 20.0, 100.0, 100.0),
+                color: CssColor::WHITE,
+                border_radius: 0.0,
+                corner_radii: [0.0; 4],
+            },
+            0,
+        );
+        list.push(DrawCommand::PopClip, 0);
+        let scene = VelloSceneBuilder::build_scene(&list);
+        pollster::block_on(
+            VelloRenderer::render_scene_to_png(&scene, 200, 200, "/tmp/clip_test.png")
+        ).unwrap();
+    }
+
+    #[test]
+    fn test_asymmetric_border_rendering() {
+        let mut list = DisplayList::default();
+        list.push(
+            DrawCommand::DrawBorder {
+                rect: rix_layout::box_model::Rect::new(20.0, 20.0, 200.0, 40.0),
+                color: CssColor::WHITE,
+                width: 1.0,
+                border_radius: 40.0,
+                corner_radii: [40.0, 0.0, 0.0, 40.0],
+                widths: [1.0, 0.0, 1.0, 1.0],
+            },
+            0,
+        );
+        let scene = VelloSceneBuilder::build_scene(&list);
+        pollster::block_on(
+            VelloRenderer::render_scene_to_png(&scene, 300, 100, "/tmp/border_test.png")
+        ).unwrap();
+    }
+
+    #[test]
+    fn test_scale_corner_radii() {
+        // If box is 100x100 and radii are [10, 10, 10, 10], no overlap -> unchanged
+        let radii = scale_corner_radii(100.0, 100.0, [10.0, 10.0, 10.0, 10.0]);
+        assert_eq!(radii, [10.0, 10.0, 10.0, 10.0]);
+
+        // If box is 50 wide and top radii are [30, 30] (sum 60 > 50), factor f = 50/60 = 5/6
+        let radii = scale_corner_radii(50.0, 100.0, [30.0, 30.0, 0.0, 0.0]);
+        assert!((radii[0] - 25.0).abs() < 1e-4);
+        assert!((radii[1] - 25.0).abs() < 1e-4);
+
+        // If one side has sum 0, it doesn't divide by zero
+        let radii = scale_corner_radii(100.0, 100.0, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(radii, [0.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]

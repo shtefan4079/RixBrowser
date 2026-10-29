@@ -182,6 +182,26 @@ impl BrowserShell {
                 http_only: false,
                 same_site: rix_storage::models::SameSitePolicy::Lax,
             });
+            let _ = storage.set_cookie(rix_storage::models::Cookie {
+                name: "SOCS".to_string(),
+                value: "CAESEwgDEgk2OTU3NDk5MTAaAmVuIAEaBgiA_K-0Bg".to_string(),
+                domain: ".youtube.com".to_string(),
+                path: "/".to_string(),
+                expires_at: Some(u64::MAX / 2),
+                secure: true,
+                http_only: false,
+                same_site: rix_storage::models::SameSitePolicy::Lax,
+            });
+            let _ = storage.set_cookie(rix_storage::models::Cookie {
+                name: "CONSENT".to_string(),
+                value: "PENDING+999".to_string(),
+                domain: ".youtube.com".to_string(),
+                path: "/".to_string(),
+                expires_at: Some(u64::MAX / 2),
+                secure: true,
+                http_only: false,
+                same_site: rix_storage::models::SameSitePolicy::Lax,
+            });
         }
         let theme = match self.customization.theme_mode() {
             ThemeMode::Dark => Some("dark"),
@@ -261,13 +281,11 @@ impl BrowserShell {
         let result = self.render_frame_inner();
         if std::env::var_os("RIX_WORKER_TRACE").is_some() {
             let elapsed = frame_started.elapsed();
-            if elapsed.as_millis() >= 30 {
-                eprintln!(
-                    "[rix-shell] render {}ms pid={}",
-                    elapsed.as_millis(),
-                    std::process::id()
-                );
-            }
+            eprintln!(
+                "[rix-shell] render {:.2}ms pid={}",
+                elapsed.as_secs_f64() * 1000.0,
+                std::process::id()
+            );
         }
         result
     }
@@ -661,7 +679,7 @@ impl BrowserShell {
         page.layout_tree = completion.layout;
         page.layout_viewport = completion.layout_viewport;
         if !page.images.is_empty() {
-            bind_page_image_resources(page);
+            apply_page_image_resources(page, font_database);
         }
         page.display_revision = next_page_display_revision();
         self.needs_redraw = true;

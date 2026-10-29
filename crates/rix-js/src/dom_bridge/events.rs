@@ -4,7 +4,7 @@ use boa_engine::object::builtins::JsArray;
 pub(super) fn event_type_bubbles(event_type: &str) -> bool {
     !matches!(
         event_type,
-        "focus" | "blur" | "load" | "unload" | "focusin" | "focusout" | "mouseenter" | "mouseleave" | "readystatechange"
+        "focus" | "blur" | "load" | "unload" | "mouseenter" | "mouseleave" | "pointerenter" | "pointerleave" | "readystatechange"
     )
 }
 

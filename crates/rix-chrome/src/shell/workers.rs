@@ -185,7 +185,6 @@ impl BrowserShell {
                         if let Some(pending) = self.worker_keys.remove(&(tab_id, id)) {
                             let current = self.pages.get(&tab_id).map(|page| {
                                 (
-                                    page.image_generation,
                                     page.page_worker
                                         .as_ref()
                                         .map(|worker| worker.borrow().focus_epoch()),
@@ -196,12 +195,7 @@ impl BrowserShell {
                                     }),
                                 )
                             });
-                            if current
-                                == Some((
-                                    pending.generation,
-                                    Some(pending.focus_epoch),
-                                    Some(target),
-                                ))
+                            if current == Some((Some(pending.focus_epoch), Some(target)))
                                 && focus_epoch == pending.focus_epoch
                             {
                                 self.pages.get_mut(&tab_id).unwrap().input_selection = selection;
@@ -225,7 +219,6 @@ impl BrowserShell {
                         if let Some(pending) = self.worker_keys.remove(&(tab_id, id)) {
                             let current = self.pages.get(&tab_id).map(|page| {
                                 (
-                                    page.image_generation,
                                     page.page_worker
                                         .as_ref()
                                         .map(|worker| worker.borrow().focus_epoch()),
@@ -240,12 +233,7 @@ impl BrowserShell {
                                 && self.active_tab_id() == tab_id
                                 && focus_epoch == pending.focus_epoch
                                 && target == pending.target
-                                && current
-                                    == Some((
-                                        pending.generation,
-                                        Some(pending.focus_epoch),
-                                        pending.target,
-                                    ))
+                                && current == Some((Some(pending.focus_epoch), pending.target))
                             {
                                 self.apply_page_key_default(&pending.input);
                             }
@@ -1124,15 +1112,15 @@ static DECODED_IMAGE_CACHE: std::sync::OnceLock<std::sync::RwLock<HashMap<String
     std::sync::OnceLock::new();
 
 fn get_cached_decoded_image(url: &str) -> Option<ImageResource> {
-    let cache = DECODED_IMAGE_CACHE.get_or_init(|| std::sync::RwLock::new(HashMap::with_capacity(128)));
+    let cache = DECODED_IMAGE_CACHE.get_or_init(|| std::sync::RwLock::new(HashMap::with_capacity(1024)));
     cache.read().ok()?.get(url).cloned()
 }
 
 fn put_cached_decoded_image(url: String, image: ImageResource) {
-    let cache = DECODED_IMAGE_CACHE.get_or_init(|| std::sync::RwLock::new(HashMap::with_capacity(128)));
+    let cache = DECODED_IMAGE_CACHE.get_or_init(|| std::sync::RwLock::new(HashMap::with_capacity(1024)));
     if let Ok(mut writer) = cache.write() {
-        if writer.len() >= 256 {
-            let to_remove: Vec<String> = writer.keys().take(128).cloned().collect();
+        if writer.len() >= 4096 {
+            let to_remove: Vec<String> = writer.keys().take(1024).cloned().collect();
             for key in to_remove {
                 writer.remove(&key);
             }

@@ -51,6 +51,7 @@ pub enum DrawCommand {
         width: f32,
         border_radius: f32,
         corner_radii: [f32; 4],
+        widths: [f32; 4],
     },
     DrawText {
         text: String,
@@ -99,6 +100,7 @@ pub enum DrawCommand {
     },
     PushClip {
         rect: Rect,
+        corner_radii: [f32; 4],
     },
     PopClip,
     PushOpacity {
@@ -143,12 +145,14 @@ impl DrawCommand {
                 width,
                 border_radius,
                 corner_radii,
+                widths,
             } => DrawCommand::DrawBorder {
                 rect: translate_rect(*rect),
                 color: *color,
                 width: *width,
                 border_radius: *border_radius,
                 corner_radii: *corner_radii,
+                widths: *widths,
             },
             DrawCommand::DrawText {
                 text,
@@ -230,8 +234,9 @@ impl DrawCommand {
                 border_radius: *border_radius,
                 spread: *spread,
             },
-            DrawCommand::PushClip { rect } => DrawCommand::PushClip {
+            DrawCommand::PushClip { rect, corner_radii } => DrawCommand::PushClip {
                 rect: translate_rect(*rect),
+                corner_radii: *corner_radii,
             },
             DrawCommand::PopClip => DrawCommand::PopClip,
             DrawCommand::PushOpacity { opacity } => DrawCommand::PushOpacity {
@@ -510,6 +515,17 @@ impl DisplayList {
             ];
             let uniform = widths.iter().all(|width| *width == widths[0])
                 && colors.iter().all(|color| *color == colors[0]);
+            let has_corner_radii =
+                style.corner_radii() != (0.0, 0.0, 0.0, 0.0) || style.border_radius > 0.0;
+            let active_colors: Vec<_> = widths
+                .iter()
+                .zip(colors.iter())
+                .filter(|(&w, c)| w > 0.0 && c.a > 0.001)
+                .map(|(_, c)| *c)
+                .collect();
+            let same_color = !active_colors.is_empty()
+                && active_colors.iter().all(|c| *c == active_colors[0]);
+
             if uniform && widths[0] > 0.0 && colors[0].a > 0.001 {
                 let bw = widths[0];
                 let (tl, tr, br, bl) = style.corner_radii();
@@ -531,6 +547,20 @@ impl DisplayList {
                         width: bw,
                         border_radius: (style.border_radius - bw / 2.0).max(0.0),
                         corner_radii,
+                        widths: [bw; 4],
+                    },
+                    current_z,
+                );
+            } else if has_corner_radii && same_color {
+                let (tl, tr, br, bl) = style.corner_radii();
+                list.push(
+                    DrawCommand::DrawBorder {
+                        rect,
+                        color: active_colors[0],
+                        width: widths.iter().copied().fold(0.0, f32::max),
+                        border_radius: style.border_radius,
+                        corner_radii: [tl, tr, br, bl],
+                        widths,
                     },
                     current_z,
                 );
@@ -578,6 +608,18 @@ impl DisplayList {
         let needs_clip = clip_x || clip_y;
         if needs_clip {
             let padding = box_data.dimensions.padding_box();
+            let (tl, tr, br, bl) = box_data.style.corner_radii();
+            let border = &box_data.dimensions.border;
+            let corner_radii = if clip_x && clip_y {
+                [
+                    (tl - border.top.max(border.left)).max(0.0),
+                    (tr - border.top.max(border.right)).max(0.0),
+                    (br - border.bottom.max(border.right)).max(0.0),
+                    (bl - border.bottom.max(border.left)).max(0.0),
+                ]
+            } else {
+                [0.0; 4]
+            };
             list.push(
                 DrawCommand::PushClip {
                     rect: Rect::new(
@@ -586,6 +628,7 @@ impl DisplayList {
                         if clip_x { padding.width } else { 2e6 },
                         if clip_y { padding.height } else { 2e6 },
                     ),
+                    corner_radii,
                 },
                 current_z,
             );
@@ -1010,7 +1053,13 @@ impl DisplayList {
             );
         }
 
-        list.push(DrawCommand::PushClip { rect: content_rect }, current_z);
+        list.push(
+            DrawCommand::PushClip {
+                rect: content_rect,
+                corner_radii: [0.0; 4],
+            },
+            current_z,
+        );
         let translated = sub_list.translate(content_rect.x, content_rect.y);
         for item in translated.items {
             list.push(item.command, current_z.saturating_add(item.z_index));

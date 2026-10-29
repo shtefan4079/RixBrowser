@@ -1,9 +1,149 @@
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use unicode_segmentation::UnicodeSegmentation;
 
 static CLIPBOARD: Mutex<String> = Mutex::new(String::new());
+
+fn read_os_clipboard() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(output) = Command::new("wl-paste")
+            .arg("--no-newline")
+            .stderr(Stdio::null())
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    return Some(text);
+                }
+            }
+        }
+        if let Ok(output) = Command::new("xclip")
+            .args(["-selection", "clipboard", "-o"])
+            .stderr(Stdio::null())
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    return Some(text);
+                }
+            }
+        }
+        if let Ok(output) = Command::new("xsel")
+            .args(["--clipboard", "--output"])
+            .stderr(Stdio::null())
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    return Some(text);
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = Command::new("pbpaste").stderr(Stdio::null()).output() {
+            if output.status.success() && !output.stdout.is_empty() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    return Some(text);
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Get-Clipboard"])
+            .stderr(Stdio::null())
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                if let Ok(text) = String::from_utf8(output.stdout) {
+                    return Some(text.trim_end_matches("\r\n").to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn write_os_clipboard(text: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(mut child) = Command::new("wl-copy")
+            .stdin(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+            return;
+        }
+        if let Ok(mut child) = Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+            return;
+        }
+        if let Ok(mut child) = Command::new("xsel")
+            .args(["--clipboard", "--input"])
+            .stdin(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+            return;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(mut child) = Command::new("pbcopy")
+            .stdin(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+            return;
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(mut child) = Command::new("clip")
+            .stdin(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+            return;
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct UndoHistory {
@@ -53,6 +193,12 @@ pub fn with_thread_undo_history<R>(f: impl FnOnce(&mut UndoHistory) -> R) -> R {
 }
 
 pub fn get_clipboard() -> String {
+    if let Some(os_text) = read_os_clipboard() {
+        if let Ok(mut lock) = CLIPBOARD.lock() {
+            *lock = os_text.clone();
+        }
+        return os_text;
+    }
     CLIPBOARD.lock().map(|g| g.clone()).unwrap_or_default()
 }
 
@@ -60,6 +206,7 @@ pub fn set_clipboard(text: &str) {
     if let Ok(mut lock) = CLIPBOARD.lock() {
         *lock = text.to_string();
     }
+    write_os_clipboard(text);
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

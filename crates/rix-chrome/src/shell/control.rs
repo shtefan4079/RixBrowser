@@ -417,7 +417,7 @@ impl BrowserShell {
                             rix_render::display_list::DrawCommand::DrawBorder { rect, color, width, .. } => {
                                 format!("Border [{}, {}, {}, {}] w={} {:?}", rect.x, rect.y, rect.width, rect.height, width, color)
                             }
-                            rix_render::display_list::DrawCommand::PushClip { rect } => {
+                            rix_render::display_list::DrawCommand::PushClip { rect, .. } => {
                                 format!("PushClip [{}, {}, {}, {}]", rect.x, rect.y, rect.width, rect.height)
                             }
                             rix_render::display_list::DrawCommand::PopClip => "PopClip".to_string(),

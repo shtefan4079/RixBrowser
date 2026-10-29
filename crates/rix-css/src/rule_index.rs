@@ -476,4 +476,36 @@ mod tests {
         let ua2 = RuleIndex::default_ua();
         assert_eq!(ua1.len(), ua2.len());
     }
+
+    #[test]
+    fn test_button_shape_icon_margin_matching() {
+        let css = r#"
+            .ytSpecButtonShapeNextSizeM.ytSpecButtonShapeNextMainstagePadding.ytSpecButtonShapeNextIconLeading .ytSpecButtonShapeNextIcon {
+                margin-right: 6px;
+            }
+        "#;
+        let sheet = StyleSheet::parse(css);
+        let index = RuleIndex::from_stylesheet(&sheet);
+
+        let html = r#"
+            <a class="ytSpecButtonShapeNextHost ytSpecButtonShapeNextOutline ytSpecButtonShapeNextCallToAction ytSpecButtonShapeNextSizeM ytSpecButtonShapeNextIconLeading ytSpecButtonShapeNextEnableBackdropFilterExperiment ytSpecButtonShapeNextMainstageIconSize ytSpecButtonShapeNextMainstagePadding">
+                <div class="ytSpecButtonShapeNextIcon ytSpecButtonShapeNextElevatedContent"></div>
+            </a>
+        "#;
+        let doc = parse_html(html);
+        let icon_node = doc.query_selector(doc.root(), ".ytSpecButtonShapeNextIcon").unwrap();
+        let matches = index.match_element(&doc, icon_node);
+        assert_eq!(matches.len(), 1, "Icon rule should match");
+
+        let empty_index = RuleIndex::new();
+        let style = crate::compute_style(
+            &doc,
+            icon_node,
+            None,
+            &empty_index,
+            &index,
+            &crate::LayoutContext::default(),
+        );
+        assert_eq!(style.margin_right, 6.0);
+    }
 }

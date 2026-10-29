@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use rix_chrome::customization::{CustomizationConfig, CustomizationManager};
 use rix_chrome::shell::BrowserShell;
 use rix_render::display_list::DrawCommand;
@@ -344,9 +346,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         page.html.clone()
     };
     std::fs::write(output.join("document.html"), &html)?;
+    let live_html = page.document.to_html_string(page.document.root());
+    std::fs::write(output.join("live_document.html"), &live_html)?;
+    let mut all_css = Vec::new();
+    for (_, sheets) in page.document.all_adopted_stylesheets() {
+        for s in sheets {
+            all_css.push(s.clone());
+        }
+    }
+    for (url, css) in &page.external_stylesheets {
+        all_css.push(format!("/* URL: {} */\n{}", url, css));
+    }
+    let _ = std::fs::write(output.join("all_stylesheets.css"), all_css.join("\n\n"));
     let layout: Vec<_> = page.layout_tree.iter().map(|item| {
         let rect = item.dimensions.content;
-        let (tag, id, class) = item
+        let (tag, id, class, attrs) = item
             .dom_node
             .and_then(|node| page.document.get(node))
             .and_then(|node| match node {
@@ -354,10 +368,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some(element.name.local.to_string()),
                     element.get_attribute("id").map(str::to_string),
                     element.get_attribute("class").map(str::to_string),
+                    element
+                        .attributes
+                        .iter()
+                        .map(|(k, v)| (k.local.to_string(), v.clone()))
+                        .collect::<Vec<_>>(),
                 )),
                 _ => None,
             })
-            .unwrap_or((None, None, None));
+            .unwrap_or((None, None, None, Vec::new()));
         let (box_type, text) = match &item.box_type {
             rix_layout::tree::AnonymousBoxType::None => ("element", None),
             rix_layout::tree::AnonymousBoxType::AnonymousBlock => ("anonymous-block", None),
@@ -383,9 +402,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
         });
         serde_json::json!({
-            "tag":tag, "id":id, "class":class, "boxType":box_type, "text":text, "textLayout":text_layout,
+            "box_id": item.id.0,
+            "parent": item.parent.map(|p| p.0),
+            "children": item.children.iter().map(|c| c.0).collect::<Vec<_>>(),
+            "tag":tag, "id_attr":id, "class":class, "attrs":attrs, "boxType":box_type, "text":text, "textLayout":text_layout,
             "rect":[rect.x,rect.y,rect.width,rect.height], "natural":item.intrinsic_size,
+            "padding": [item.dimensions.padding.top, item.dimensions.padding.right, item.dimensions.padding.bottom, item.dimensions.padding.left],
+            "border": [item.dimensions.border.top, item.dimensions.border.right, item.dimensions.border.bottom, item.dimensions.border.left],
             "style": {
+                "border_radius": item.style.border_radius,
+                "corner_radii": item.style.corner_radii(),
+                "box_sizing": item.style.box_sizing,
+                "padding_top": item.style.padding_top,
+                "padding_right": item.style.padding_right,
+                "padding_bottom": item.style.padding_bottom,
+                "padding_left": item.style.padding_left,
                 "width": item.style.width,
                 "height": item.style.height,
                 "width_percent": item.style.width_percent,
@@ -407,7 +438,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "font_size": item.style.font_size,
                 "font_family": item.style.font_family.chars().take(256).collect::<String>(),
                 "overflow_x": item.style.overflow_x,
-                "overflow_y": item.style.overflow_y
+                "overflow_y": item.style.overflow_y,
+                "align_items": item.style.align_items,
+                "align_self": item.style.align_self,
+                "justify_content": item.style.justify_content,
+                "top": item.style.top,
+                "bottom": item.style.bottom,
+                "left": item.style.left,
+                "right": item.style.right,
             },
         })
     }).collect();
@@ -477,11 +515,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|item| {
                 let mut entry = serde_json::json!({"z": item.z_index});
                 match &item.command {
-                    DrawCommand::DrawRect { rect, color, .. } => {
+                    DrawCommand::DrawRect { rect, color, border_radius, corner_radii } => {
                         entry["kind"] = "rect".into();
                         entry["rect"] = serde_json::json!([rect.x, rect.y, rect.width, rect.height]);
                         entry["color"] =
                             serde_json::json!([color.r, color.g, color.b, color.a]);
+                        entry["border_radius"] = (*border_radius).into();
+                        entry["corner_radii"] = serde_json::json!(corner_radii);
                     }
                     DrawCommand::DrawGlyphs { glyphs, x, y } => {
                         entry["kind"] = "glyphs".into();
@@ -500,15 +540,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 serde_json::json!([fill.r, fill.g, fill.b, fill.a]);
                         }
                     }
-                    DrawCommand::DrawBorder { rect, color, .. } => {
+                    DrawCommand::DrawBorder { rect, color, width, border_radius, corner_radii, widths } => {
                         entry["kind"] = "border".into();
                         entry["rect"] = serde_json::json!([rect.x, rect.y, rect.width, rect.height]);
                         entry["color"] =
                             serde_json::json!([color.r, color.g, color.b, color.a]);
+                        entry["width"] = (*width).into();
+                        entry["widths"] = serde_json::json!(widths);
+                        entry["border_radius"] = (*border_radius).into();
+                        entry["corner_radii"] = serde_json::json!(corner_radii);
                     }
-                    DrawCommand::PushClip { rect } => {
+                    DrawCommand::PushClip { rect, corner_radii } => {
                         entry["kind"] = "push-clip".into();
                         entry["rect"] = serde_json::json!([rect.x, rect.y, rect.width, rect.height]);
+                        entry["corner_radii"] = serde_json::json!(corner_radii);
                     }
                     DrawCommand::PushOpacity { opacity } => {
                         entry["kind"] = "push-opacity".into();

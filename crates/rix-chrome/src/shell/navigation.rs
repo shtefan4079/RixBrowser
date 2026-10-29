@@ -124,6 +124,7 @@ impl BrowserShell {
         steps += self.poll_image_completions();
         steps += self.tick_media_engines(std::time::Instant::now());
         self.schedule_page_images();
+        self.sync_page_layout_inputs();
         steps += self.event_loop.step(self.runtime.context_mut());
         for message in self.event_loop.take_task_errors() {
             tracing::warn!(%message, "browser chrome task failed");
@@ -280,6 +281,8 @@ impl BrowserShell {
             node_count,
             scheduled_images_revision: 0,
             scheduled_images_scroll_y: 0.0,
+            hovered_node: None,
+            hovered_chain: Vec::new(),
             worker_layout_sync: WorkerLayoutSync::default(),
             worker_animation_frame_requested: false,
             worker_animation_frame_in_flight: false,
@@ -915,6 +918,26 @@ impl BrowserShell {
                 let _ = storage.set_cookie(rix_storage::models::Cookie {
                     name: "PREF".to_string(),
                     value: pref_val.to_string(),
+                    domain: ".youtube.com".to_string(),
+                    path: "/".to_string(),
+                    expires_at: Some(u64::MAX / 2),
+                    secure: true,
+                    http_only: false,
+                    same_site: rix_storage::models::SameSitePolicy::Lax,
+                });
+                let _ = storage.set_cookie(rix_storage::models::Cookie {
+                    name: "SOCS".to_string(),
+                    value: "CAESEwgDEgk2OTU3NDk5MTAaAmVuIAEaBgiA_K-0Bg".to_string(),
+                    domain: ".youtube.com".to_string(),
+                    path: "/".to_string(),
+                    expires_at: Some(u64::MAX / 2),
+                    secure: true,
+                    http_only: false,
+                    same_site: rix_storage::models::SameSitePolicy::Lax,
+                });
+                let _ = storage.set_cookie(rix_storage::models::Cookie {
+                    name: "CONSENT".to_string(),
+                    value: "PENDING+999".to_string(),
                     domain: ".youtube.com".to_string(),
                     path: "/".to_string(),
                     expires_at: Some(u64::MAX / 2),

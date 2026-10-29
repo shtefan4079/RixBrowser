@@ -101,7 +101,7 @@ fn redact_error(input: &str) -> String {
             cursor = end;
         }
     }
-    output.chars().take(240).collect()
+    output.chars().take(4096).collect()
 }
 
 fn redact_diagnostic_url(input: &str) -> String {

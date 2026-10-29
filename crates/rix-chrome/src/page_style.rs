@@ -353,7 +353,7 @@ impl StyleEnvironment {
         let t1 = std::time::Instant::now();
         let result = Self::build_from_sources(sources, viewport_width, viewport_height);
         let build_ms = t1.elapsed().as_millis();
-        if std::env::var_os("RIX_WORKER_TRACE").is_some() && (collect_ms > 20 || build_ms > 20) {
+        if std::env::var_os("RIX_WORKER_TRACE").is_some() {
             eprintln!("[rix-style-env] collect={}ms build={}ms", collect_ms, build_ms);
         }
         result
