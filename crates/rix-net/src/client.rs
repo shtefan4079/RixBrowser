@@ -610,6 +610,17 @@ impl HttpClient {
     }
 
     pub async fn fetch_stream(&self, url: &RixUrl) -> Result<StreamingResponse> {
+        if matches!(self.request_method, Method::GET) && self.request_body.is_empty() {
+            if let Some(cache) = &self.http_cache {
+                let now = crate::cache::now_secs();
+                let url_str = url.as_str();
+                if let Some(entry) = cache.get(url_str) {
+                    if entry.is_fresh(now) {
+                        return Ok(StreamingResponse::from_cached_entry(&entry, url.clone()));
+                    }
+                }
+            }
+        }
         self.follow_stream_redirects(url, None).await
     }
 
@@ -635,6 +646,19 @@ impl HttpClient {
         let mut request = self.clone();
         let mut upload = upload;
         let bounded_heads = upload.is_none();
+
+        if matches!(request.request_method, Method::GET) && upload.is_none() {
+            if let Some(cache) = &request.http_cache {
+                if let Some(entry) = cache.get(url.as_str()) {
+                    if entry.can_revalidate() {
+                        current_conditional = ConditionalRequest {
+                            etag: entry.meta.etag.clone(),
+                            last_modified: entry.meta.last_modified.clone(),
+                        };
+                    }
+                }
+            }
+        }
 
         loop {
             let fetch_start_ms = clock.elapsed_ms();
@@ -704,6 +728,28 @@ impl HttpClient {
                     current_url = next_url;
                     current_conditional = ConditionalRequest::empty();
                     continue;
+                }
+            }
+
+            if status == 304 {
+                if let Some(cache) = &request.http_cache {
+                    let now = crate::cache::now_secs();
+                    if let Some(entry) = cache.get(current_url.as_str()) {
+                        let mut timing = clock.finish(fetch_start_ms, request_start_ms, response_start_ms);
+                        timing.navigation.redirect_start_ms = redirect_start_ms;
+                        timing.navigation.redirect_end_ms = redirect_end_ms;
+                        timing.navigation.redirect_count = u32::try_from(redirect_count).unwrap_or(u32::MAX);
+
+                        let mut resp = if let Some(updated) = cache.update_revalidated(current_url.as_str(), &headers, now) {
+                            StreamingResponse::from_cached_entry(&updated, current_url.clone())
+                        } else {
+                            StreamingResponse::from_cached_entry(&entry, current_url.clone())
+                        };
+                        resp.navigation_timing = timing.navigation;
+                        resp.navigation_started = timing.started;
+                        resp.set_cookies = set_cookies;
+                        return Ok(resp);
+                    }
                 }
             }
 

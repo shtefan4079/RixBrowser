@@ -45,6 +45,7 @@ mod page_layout;
 mod preload_scanner;
 mod render;
 mod workers;
+pub mod youtube_hydrator;
 
 use crate::page_style::{
     compute_page_layout, document_base_url, resolve_external_resource, resolve_page_link,

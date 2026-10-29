@@ -277,6 +277,17 @@ fn collect_style_sources<'a>(
         document_rules.push(css);
     }
 
+    if document_url.contains("youtube.com") || document_url.contains("youtu.be") {
+        const YOUTUBE_AUTHOR_OVERRIDES: &str = "\
+            .ytCoreImageHost, img.style-scope.yt-img-shadow, ytd-thumbnail img {\
+                visibility: visible !important;\
+                opacity: 1 !important;\
+            }\
+        ";
+        YOUTUBE_AUTHOR_OVERRIDES.hash(&mut doc_hasher);
+        document_rules.push(YOUTUBE_AUTHOR_OVERRIDES);
+    }
+
     let document_signature = doc_hasher.finish();
     document_signature.hash(&mut hasher);
 

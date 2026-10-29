@@ -301,6 +301,20 @@ pub(super) async fn load_navigation_content_progressive(
     }
     let html = String::from_utf8(response.body)
         .unwrap_or_else(|e| String::from_utf8_lossy(&e.into_bytes()).into_owned());
+    let html = if final_url.contains("youtube.com") || final_url.contains("youtu.be") {
+        let t_hyd = std::time::Instant::now();
+        let hydrated = super::youtube_hydrator::maybe_hydrate_youtube_html(&final_url, &html);
+        if std::env::var_os("RIX_WORKER_TRACE").is_some() {
+            eprintln!(
+                "[rix-youtube-fastpath] hydration took {:.2}ms (success={})",
+                t_hyd.elapsed().as_secs_f64() * 1000.0,
+                hydrated.is_some()
+            );
+        }
+        hydrated.unwrap_or(html)
+    } else {
+        html
+    };
     let t_parse = std::time::Instant::now();
     let mut document = parse_html(&html);
     let parse_ms = t_parse.elapsed().as_secs_f64() * 1000.0;
